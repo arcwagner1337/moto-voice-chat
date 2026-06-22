@@ -1,0 +1,43 @@
+name: Android Build
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Проект настроен на Bun, разворачиваем его в CI
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      # Для Expo SDK 52 обязательна Java версии 17
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # Установка всех зависимостей проекта
+      - name: Install dependencies
+        run: bun install
+
+      # Генерируем нативную папку /android со всеми конфигурациями WebRTC и UDP
+      - name: Expo Prebuild
+        run: npx expo prebuild --platform android
+
+      # Собираем отладочный APK-файл силами Gradle
+      - name: Build Android App (Debug APK)
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      # Сохраняем готовый APK-файл в артефакты сборки GitHub, чтобы его можно было скачать
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: moto-voice-chat-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk

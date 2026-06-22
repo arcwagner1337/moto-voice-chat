@@ -1,0 +1,112 @@
+name: Build Mobile (Manual)
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ветка, тег или SHA коммита"
+        required: true
+        default: "main"
+      profile:
+        description: "Профиль сборки"
+        required: true
+        default: "development"
+        type: choice
+        options: [ development, preview, production ]
+      platform:
+        description: "Платформа"
+        required: true
+        default: "android"
+        type: choice
+        options: [ android, ios ]
+      package_manager:
+        description: "Пакетный менеджер"
+        required: true
+        default: "npm"
+        type: choice
+        options: [ npm, bun ]
+
+jobs:
+  build:
+    runs-on: ${{ github.event.inputs.platform == 'ios' && 'macos-latest' || 'ubuntu-latest' }}
+    steps:
+      - name: ⬇️ Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: ${{ github.event.inputs.package_manager == 'npm' && 'npm' || '' }}
+
+      - name: 🚀 Setup Bun
+        if: ${{ github.event.inputs.package_manager == 'bun' }}
+        uses: oven-sh/setup-bun@v1
+
+      - name: ☕ Setup Java
+        if: ${{ github.event.inputs.platform == 'android' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: 🏗 Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: 📦 Install dependencies
+        run: |
+          if [ "${{ github.event.inputs.package_manager }}" = "bun" ]; then
+            bun install
+          else
+            npm install
+          fi
+          # Удаляем конфликтующие типы по совету expo doctor
+          npm uninstall @types/react-native --save-dev || true
+
+      - name: 🛠 Fix Native Modules (Android)
+        if: ${{ github.event.inputs.platform == 'android' }}
+        run: |
+          find node_modules -name "build.gradle" -exec sed -i '/assertMinimalReactNativeVersionTask/d' {} + || true
+
+      - name: 🔑 Decode Keystore (Android)
+        if: ${{ github.event.inputs.platform == 'android' }}
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > ./release.jks
+
+      - name: 🚀 Build with EAS
+        run: |
+          # 1. Глобальный конфиг Gradle (самый приоритетный способ)
+          mkdir -p ~/.gradle
+          echo "kotlin.plugin.suppressKotlinVersionCompatibilityCheck=true" >> ~/.gradle/gradle.properties
+          
+          # 2. Локальный конфиг (на случай, если EAS подхватит его при пребилде)
+          mkdir -p android
+          echo "kotlin.plugin.suppressKotlinVersionCompatibilityCheck=true" >> android/gradle.properties
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=true" >> android/gradle.properties
+
+          # 3. Запуск сборки
+          eas build --platform ${{ github.event.inputs.platform }} --local --profile ${{ github.event.inputs.profile }} --non-interactive --clear-cache
+        env:
+          NODE_ENV: ${{ github.event.inputs.profile }}
+          EAS_BUILD_ANDROID_KEYSTORE_PATH: "./release.jks"
+          EAS_BUILD_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          EAS_BUILD_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          EAS_BUILD_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # 4. Прокидываем флаг как системную переменную проекта (System Property)
+          ORG_GRADLE_PROJECT_kotlin.plugin.suppressKotlinVersionCompatibilityCheck: "true"
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.console=plain"
+
+      - name: 📁 Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.platform }}-${{ github.event.inputs.profile }}-${{ github.run_id }}
+          path: |
+            **/*.apk
+            **/*.aab
+            **/*.ipa
+            **/*.app
+          if-no-files-found: error

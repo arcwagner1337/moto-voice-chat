@@ -9,7 +9,7 @@ export default function Home() {
   return (
     <>
       <Stack.Screen options={{ title: 'Tab One' }} />
-      <View className="flex-1 items-center justify-center bg-orange-500 p-6">
+      <View className="flex-1 items-center justify-center bg-sky-800 p-6">
         <ScreenContent path="app/(tabs)/index.tsx" title="Tab One" />
       </View>
     </>

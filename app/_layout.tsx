@@ -1,28 +1,36 @@
-
 import '../global.css';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-
-
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Stack } from "expo-router";
-
-
+import { View } from 'react-native';
 
 export const unstable_settings = {
-  // Ensure that reloading on `/modal` keeps a back button present.
   initialRouteName: "(tabs)",
 };
 
-export default function RootLayout() {
-
+function AppContent() {
+  const insets = useSafeAreaInsets();
 
   return (
-
-    <SafeAreaProvider>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+    // Применяем фоновый цвет и отступ снизу для всего приложения
+    // Это гарантирует, что даже Tab Bar поднимется выше системной полоски
+    <View style={{ 
+      flex: 1, 
+      backgroundColor: '#020617', 
+      paddingBottom: insets.bottom // Авто-отступ для любых девайсов
+    }}>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" />
         <Stack.Screen name="modal" options={{ presentation: "modal" }} />
       </Stack>
-    </SafeAreaProvider>
+    </View>
+  );
+}
 
+// 2. Главный Layout только раздает "Контекст"
+export default function RootLayout() {
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
   );
 }

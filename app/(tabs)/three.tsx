@@ -22,7 +22,7 @@ import io from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, AndroidCategory, AndroidColor, EventType } from '@notifee/react-native';
 
-const SERVER_URL = "http://192.168.1.46:3000";
+const SERVER_URL = "http://10.49.212.88:3000";
 const RECENT_ROOMS_KEY = "@recent_rooms_list";
 const USER_NAME_KEY = "@user_custom_name";
 

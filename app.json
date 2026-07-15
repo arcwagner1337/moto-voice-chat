@@ -14,7 +14,8 @@
       },
       "plugins": [
       "expo-router",
-      "@config-plugins/react-native-webrtc"
+      "@config-plugins/react-native-webrtc",
+      "./plugins/withDebugBundle.js"
     ],
       "experiments": {
         "typedRoutes": true

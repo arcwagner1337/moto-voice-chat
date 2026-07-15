@@ -20,7 +20,7 @@ import InCallManager from 'react-native-incall-manager';
 import { mediaDevices, RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCView } from 'react-native-webrtc';
 import io from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import notifee, { AndroidImportance, AndroidCategory, AndroidColor, EventType } from '@notifee/react-native';
+import notifee, { AndroidImportance, AndroidCategory, AndroidColor, AndroidForegroundServiceType, EventType } from '@notifee/react-native';
 
 const SERVER_URL = "http://10.49.212.88:3000";
 const RECENT_ROOMS_KEY = "@recent_rooms_list";
@@ -306,7 +306,7 @@ export default function InternetChatRoom() {
 			android: {
 				channelId,
 				asForegroundService: true,
-				// ❌ foregroundServiceTypes убран, так как он берется из app.json
+				foregroundServiceTypes: [AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_MICROPHONE],
 				color: AndroidColor.CYAN,
 				ongoing: true,
 				category: AndroidCategory.CALL,

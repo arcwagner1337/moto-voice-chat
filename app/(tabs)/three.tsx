@@ -33,18 +33,8 @@ const configuration = {
 	]
 };
 
-// ✅ Регистрация обработчика foreground service
-notifee.registerForegroundService((notification) => {
-	return new Promise<void>((resolve) => {
-		const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
-			if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'stop-call') {
-				notifee.stopForegroundService();
-				unsubscribe();
-				resolve();
-			}
-		});
-	});
-});
+// registerForegroundService вызывается один раз в app/(tabs)/_layout.tsx;
+// нажатие 'stop-call' обрабатывается через onForegroundEvent внутри компонента.
 
 export default function InternetChatRoom() {
 	const activeInterval = useRef<NodeJS.Timeout | null>(null);
@@ -297,6 +287,19 @@ export default function InternetChatRoom() {
 	};
 
 	const rebuildNotification = async (target: string) => {
+		// Android 14+ бросает SecurityException при старте FGS типа microphone
+		// без выданного RECORD_AUDIO — проверяем до запуска.
+		if (Platform.OS === 'android') {
+			const hasMic = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+			if (!hasMic) {
+				const status = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+				if (status !== PermissionsAndroid.RESULTS.GRANTED) {
+					Alert.alert('Ошибка', 'Без доступа к микрофону фоновый режим не работает');
+					return;
+				}
+			}
+		}
+
 		const channelId = await notifee.createChannel({
 			id: 'mesh-voice-intercom',
 			name: 'Mesh Voice Intercom',

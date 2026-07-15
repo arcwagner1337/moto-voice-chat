@@ -430,6 +430,19 @@ export default function MeshChatRoom() {
 
   const startAudioForegroundService = async () => {
     try {
+      // Android 14+ бросает SecurityException при старте FGS типа microphone
+      // без выданного RECORD_AUDIO — проверяем до запуска.
+      if (Platform.OS === 'android') {
+        const hasMic = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+        if (!hasMic) {
+          const status = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+          if (status !== PermissionsAndroid.RESULTS.GRANTED) {
+            Alert.alert('Ошибка', 'Без доступа к микрофону фоновый режим не работает');
+            return;
+          }
+        }
+      }
+
       // Создаем канал уведомлений
       const channelId = await notifee.createChannel({
         id: 'voice-chat-service',
@@ -634,9 +647,4 @@ export default function MeshChatRoom() {
   );
 }
 
-notifee.registerForegroundService((notification) => {
-  return new Promise(() => {
-    // Бесконечный промис держит сервис живым, пока мы не вызовем stopForegroundService
-    console.log('Нативный Foreground Service микрофона запущен в фоне!');
-  });
-});
+// registerForegroundService вызывается один раз в app/(tabs)/_layout.tsx

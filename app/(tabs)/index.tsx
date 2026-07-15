@@ -1,20 +1,21 @@
 import { Stack } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StatusBar, PermissionsAndroid, Platform, Linking } from 'react-native';
-import notifee, { AndroidColor, AndroidForegroundServiceType, AndroidImportance, AuthorizationStatus } from '@notifee/react-native';
+import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Audio } from 'expo-av';
 
-notifee.registerForegroundService(() => {
-  return new Promise(() => {});
-});
-
 export default function ProjectInfo() {
-  useKeepAwake(); 
+  useKeepAwake();
   const [isServiceActive, setIsServiceActive] = useState(false);
 
   useEffect(() => {
-    async function startBackgroundService() {
+    // Foreground service с типом microphone здесь НЕ запускаем: на Android 14+
+    // его нельзя стартовать без выданного RECORD_AUDIO (SecurityException),
+    // а разрешение на микрофон запрашивают экраны комнат. Сервисом владеют
+    // two.tsx/three.tsx на время активной сессии. Здесь только готовим
+    // аудио-режим и разрешения.
+    async function prepareEnvironment() {
       try {
         // 1. Активируем нативный фоновый аудио-режим Expo
         await Audio.setAudioModeAsync({
@@ -40,33 +41,9 @@ export default function ProjectInfo() {
         const settings = await notifee.requestPermission();
         if (settings.authorizationStatus === AuthorizationStatus.DENIED) return;
 
-        // 3. Создание канала и запуск Foreground Service
-        const channelId = await notifee.createChannel({
-          id: 'mesh-voice-intercom',
-          name: 'Mesh Voice Intercom',
-          importance: AndroidImportance.HIGH,
-        });
-
-        await notifee.displayNotification({
-          id: 'mesh-intercom-fgs',
-          title: '⚡ MESH_VOICE ACTIVE',
-          body: 'Интерком работает автономно в фоновом режиме.',
-          android: {
-            channelId,
-            asForegroundService: true,
-            foregroundServiceTypes: [AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_MICROPHONE],
-            color: AndroidColor.CYAN,
-            ongoing: true,
-            pressAction: {
-              id: 'default',
-              launchActivity: 'default',
-            },
-          },
-        });
-
         setIsServiceActive(true);
 
-        // 4. Запрос на отключение оптимизации батареи (Doze Mode)
+        // 3. Запрос на отключение оптимизации батареи (Doze Mode)
         if (Platform.OS === 'android') {
           const isOptimized = await notifee.isBatteryOptimizationEnabled();
           if (isOptimized) {
@@ -81,7 +58,7 @@ export default function ProjectInfo() {
       }
     }
 
-    startBackgroundService();
+    prepareEnvironment();
   }, []);
 
   return (

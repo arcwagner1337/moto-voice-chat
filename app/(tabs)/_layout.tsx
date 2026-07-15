@@ -4,6 +4,17 @@ import { View } from 'react-native';
 import { FontAwesome5 } from '@expo/vector-icons'; // Популярные иконки
 import notifee, { EventType } from '@notifee/react-native';
 
+// Единственная регистрация foreground-service runner'а на всё приложение.
+// notifee хранит только один runner — повторные вызовы в разных экранах
+// перезаписывали друг друга в непредсказуемом порядке загрузки модулей.
+// Runner держит сервис бесконечным промисом; остановка — только явным
+// notifee.stopForegroundService() из экранов комнат.
+notifee.registerForegroundService(() => {
+  return new Promise(() => {
+    console.log('Нативный Foreground Service микрофона запущен в фоне!');
+  });
+});
+
 notifee.onBackgroundEvent(async ({ type, detail }) => {
   const { notification, pressAction } = detail;
 

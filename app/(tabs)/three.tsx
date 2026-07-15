@@ -21,6 +21,7 @@ import { mediaDevices, RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 import io from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, AndroidCategory, AndroidColor, AndroidForegroundServiceType, EventType } from '@notifee/react-native';
+import { setupCallKeep, generateCallUuid, startCallKeepSession, endCallKeepSession, RNCallKeep } from '@/lib/callKeepService';
 
 const SERVER_URL = "http://10.49.212.88:3000";
 const RECENT_ROOMS_KEY = "@recent_rooms_list";
@@ -74,6 +75,7 @@ export default function InternetChatRoom() {
 	const inRoomRef = useRef(false);
 	const roomIDRef = useRef('');
 	const userNameRef = useRef('');
+	const callUuidRef = useRef<string | null>(null);
 
 	useEffect(() => { inRoomRef.current = inRoom; }, [inRoom]);
 	useEffect(() => { roomIDRef.current = roomID; }, [roomID]);
@@ -103,9 +105,16 @@ export default function InternetChatRoom() {
 			appStateRef.current = nextState;
 		});
 
+		// Если звонок завершён из системного UI (уведомление CallKeep) —
+		// синхронизируем состояние приложения.
+		const callKeepEndListener = RNCallKeep.addEventListener('endCall', () => {
+			if (inRoomRef.current) stopAll();
+		});
+
 		return () => {
 			unsubscribe();
 			appStateSubscription.remove();
+			callKeepEndListener.remove();
 			stopAll();
 		};
 	}, []);
@@ -132,6 +141,7 @@ export default function InternetChatRoom() {
 			} catch (e) {
 				console.log('Permission error:', e);
 			}
+			await setupCallKeep();
 		}
 		try {
 			const stream = await mediaDevices.getUserMedia({
@@ -366,6 +376,8 @@ export default function InternetChatRoom() {
 
 			if (Platform.OS === 'android') {
 				InCallManager.turnScreenOn();
+				callUuidRef.current = generateCallUuid();
+				startCallKeepSession(callUuidRef.current, `MESH_VOICE: ${target}`);
 			}
 
 		} catch (e) {
@@ -451,6 +463,8 @@ export default function InternetChatRoom() {
 
 		await notifee.stopForegroundService();
 		await notifee.cancelNotification('mesh-intercom-fgs');
+		endCallKeepSession(callUuidRef.current);
+		callUuidRef.current = null;
 
 		peers.current = {};
 		remoteStreams.current = {};

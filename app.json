@@ -3,32 +3,31 @@
     "name": "my-app",
     "slug": "my-app",
     "version": "1.0.0",
-    
-    
-      "scheme": "my-app",
-      "platforms": ["ios", "android"],
-      "web": {
-        "bundler": "metro",
-        "output": "static",
-        "favicon": "./assets/favicon.png"
-      },
-      "plugins": [
+    "scheme": "my-app",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
       "expo-router",
       "@config-plugins/react-native-webrtc",
-      "./plugins/withDebugBundle.js"
+      "./plugins/withDebugBundle.js",
+      "expo-audio",
+      "expo-asset",
+      "expo-font"
     ],
-      "experiments": {
-        "typedRoutes": true
-        
-          ,"tsconfigPaths": true
-        
-      },
-    
+    "experiments": {
+      "typedRoutes": true,
+      "tsconfigPaths": true
+    },
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    
-     "userInterfaceStyle": "light",
-    
+    "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",

@@ -17,6 +17,7 @@
       "expo-router",
       "@config-plugins/react-native-webrtc",
       "./plugins/withDebugBundle.js",
+      "./plugins/withNotifeeForegroundServiceType.js",
       "expo-audio",
       "expo-asset",
       "expo-font"

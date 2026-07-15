@@ -244,7 +244,7 @@ export default function MeshChatRoom() {
     const port = parseInt(roomPort);
     activePort.current = port;
 
-    // await startAudioForegroundService();
+    await startAudioForegroundService();
 
     setupTcpServer(port);
     // InCallManager.start({ media: 'audio' });

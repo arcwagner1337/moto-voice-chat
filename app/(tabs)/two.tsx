@@ -9,7 +9,6 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import notifee, { AndroidForegroundServiceType } from '@notifee/react-native';
 import { AppState, AppStateStatus } from 'react-native';
-import { setupCallKeep, generateCallUuid, startCallKeepSession, endCallKeepSession, RNCallKeep } from '@/lib/callKeepService';
 
 const zeroconf = new Zeroconf();
 let isSending = false;
@@ -45,7 +44,6 @@ export default function MeshChatRoom() {
   const server = useRef<any>(null);
   const activePort = useRef<number>(12345);
   const flatListRef = useRef<any>(null);
-  const callUuidRef = useRef<string | null>(null);
 
   const [selectedRoom, setSelectedRoom] = useState<any>(null);
   const [inputPass, setInputPass] = useState('');
@@ -135,12 +133,6 @@ export default function MeshChatRoom() {
 
     const subscription = AppState.addEventListener('change', handleAppStateChange);
 
-    // Если звонок завершён из системного UI (уведомление CallKeep) —
-    // синхронизируем состояние приложения.
-    const callKeepEndListener = RNCallKeep.addEventListener('endCall', () => {
-      if (inRoomRef.current) stopAll();
-    });
-
     // 4. Таймер очистки комнат
     const timer = setInterval(() => {
       setAvailableRooms(prev => prev.filter(r => Date.now() - r.lastSeen < 15000));
@@ -150,7 +142,6 @@ export default function MeshChatRoom() {
     return () => {
       console.log('Удаляем все слушатели и останавливаем службы...');
       if (subscription?.remove) subscription.remove();
-      callKeepEndListener.remove();
       clearInterval(timer);
 
       try {
@@ -214,7 +205,6 @@ export default function MeshChatRoom() {
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         'android.permission.MANAGE_OWN_CALLS' as any,
       ]);
-      await setupCallKeep();
     }
     const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
     localStream.current = stream;
@@ -281,9 +271,6 @@ export default function MeshChatRoom() {
       } catch (e) {
         console.log('InCallManager.requestAudioFocus не поддерживается, пропускаем');
       }
-
-      callUuidRef.current = generateCallUuid();
-      startCallKeepSession(callUuidRef.current, `MESH_VOICE: ${roomName}`);
     }
 
     zeroconf.publishService('voicechat', 'tcp', 'local.', myServiceName, port, { roomName, isRoom: 'true' });
@@ -315,9 +302,6 @@ export default function MeshChatRoom() {
       } catch (e) {
         console.log('InCallManager.requestAudioFocus не поддерживается, пропускаем');
       }
-
-      callUuidRef.current = generateCallUuid();
-      startCallKeepSession(callUuidRef.current, `MESH_VOICE: ${room.name}`);
     }
 
 
@@ -431,8 +415,6 @@ export default function MeshChatRoom() {
     Object.keys(peers.current).forEach(ip => sendSignaling(ip, { type: exitSignal }, activePort.current));
 
     stopAudioForegroundService();
-    endCallKeepSession(callUuidRef.current);
-    callUuidRef.current = null;
 
     setTimeout(() => {
       Object.values(peers.current).forEach(p => p.close());

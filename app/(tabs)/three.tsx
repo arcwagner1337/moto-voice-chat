@@ -66,6 +66,7 @@ export default function InternetChatRoom() {
 
 	const socket = useRef<any>(null);
 	const peers = useRef<{ [key: string]: RTCPeerConnection }>({});
+	const peerKeepAlives = useRef<{ [key: string]: ReturnType<typeof setInterval> }>({});
 	const remoteStreams = useRef<{ [key: string]: any }>({});
 	const peerNames = useRef<{ [key: string]: string }>({});
 	const localStream = useRef<any>(null);
@@ -285,6 +286,10 @@ export default function InternetChatRoom() {
 				peers.current[id].close();
 				delete peers.current[id];
 				delete remoteStreams.current[id];
+				if (peerKeepAlives.current[id]) {
+					clearInterval(peerKeepAlives.current[id]);
+					delete peerKeepAlives.current[id];
+				}
 				updateUI();
 			}
 		});
@@ -395,7 +400,7 @@ export default function InternetChatRoom() {
 		pcAny.ontrack = (e: any) => { if (e.streams) { remoteStreams.current[remoteId] = e.streams; updateUI(); } };
 		if (localStream.current) localStream.current.getTracks().forEach((t: any) => pc.addTrack(t, localStream.current));
 		peers.current[remoteId] = pc;
-		setInterval(() => {
+		peerKeepAlives.current[remoteId] = setInterval(() => {
 			if (dc.readyState === 'open') {
 				dc.send("keep-alive");
 			}
@@ -434,7 +439,7 @@ export default function InternetChatRoom() {
 		const nextIdx = (currentMicIdx + 1) % availableMics.length;
 		try {
 			const newStream = await mediaDevices.getUserMedia({ audio: { deviceId: { exact: availableMics[nextIdx].deviceId } }, video: false });
-			const newTrack = newStream.getAudioTracks();
+			const newTrack = newStream.getAudioTracks()[0];
 			Object.values(peers.current).forEach((pc: any) => {
 				const sender = pc.getSenders().find((s: any) => s.track?.kind === 'audio');
 				if (sender) sender.replaceTrack(newTrack);
@@ -452,6 +457,8 @@ export default function InternetChatRoom() {
 		await notifee.stopForegroundService();
 		await notifee.cancelNotification('mesh-intercom-fgs');
 
+		Object.values(peerKeepAlives.current).forEach(clearInterval);
+		peerKeepAlives.current = {};
 		peers.current = {};
 		remoteStreams.current = {};
 		setInRoom(false);

@@ -1,7 +1,7 @@
 import { Stack } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StatusBar, PermissionsAndroid, Platform, Linking } from 'react-native';
-import notifee, { AndroidColor, AndroidImportance, AuthorizationStatus } from '@notifee/react-native';
+import notifee, { AndroidColor, AndroidForegroundServiceType, AndroidImportance, AuthorizationStatus } from '@notifee/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Audio } from 'expo-av';
 
@@ -54,6 +54,7 @@ export default function ProjectInfo() {
           android: {
             channelId,
             asForegroundService: true,
+            foregroundServiceTypes: [AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_MICROPHONE],
             color: AndroidColor.CYAN,
             ongoing: true,
             pressAction: {

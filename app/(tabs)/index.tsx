@@ -79,7 +79,7 @@ export default function ProjectInfo() {
 
   return (
     <View className="flex-1 bg-slate-950">
-      <Stack.Screen options={{ title: 'SYSTEM_OS', headerShown: false }} />
+      <Stack.Screen options={{ title: 'DASHBOARD', headerShown: false }} />
       <StatusBar barStyle="light-content" />
       
       <ScrollView
@@ -106,7 +106,7 @@ export default function ProjectInfo() {
             onPress={() => router.push('/two')}
             className="flex-1 items-center bg-slate-900 border border-slate-800 rounded-2xl py-4">
             <FontAwesome5 name="broadcast-tower" size={18} color="#22d3ee" />
-            <Text className="text-white text-[10px] font-bold uppercase mt-2">Comm Center</Text>
+            <Text className="text-white text-[10px] font-bold uppercase mt-2">Local call</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => router.push('/three')}

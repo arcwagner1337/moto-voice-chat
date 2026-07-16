@@ -65,11 +65,12 @@ export default function TabLayout() {
         }}
       />
 
-      {/* ВТОРАЯ ВКЛАДКА (Рация) */}
+      {/* ВТОРАЯ ВКЛАДКА (Рация) — скрыта из таббара, доступна по прямому переходу */}
       <Tabs.Screen
         name="two"
         options={{
           title: 'COMM_CENTER',
+          href: null,
           tabBarIcon: ({ color }) => <FontAwesome5 name="broadcast-tower" size={18} color={color} />,
         }}
       />
@@ -77,6 +78,7 @@ export default function TabLayout() {
         name="three"
         options={{
           title: 'INTERNET CALL',
+          href: null,
           tabBarIcon: ({ color }) => <FontAwesome5 name="broadcast-tower" size={18} color={color} />,
         }}
       />

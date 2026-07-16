@@ -1,13 +1,29 @@
-import { Stack } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, StatusBar, PermissionsAndroid, Platform, Linking } from 'react-native';
+import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, ScrollView, StatusBar, PermissionsAndroid, Platform, Linking, TouchableOpacity } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FontAwesome5 } from '@expo/vector-icons';
 import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Audio } from 'expo-av';
+import { loadProfile } from '../../lib/profile';
 
 export default function ProjectInfo() {
   useKeepAwake();
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [isServiceActive, setIsServiceActive] = useState(false);
+  const [profileName, setProfileName] = useState('');
+  const [profileAvatar, setProfileAvatar] = useState('👤');
+
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile().then((p) => {
+        setProfileName(p.name);
+        setProfileAvatar(p.avatar || '👤');
+      });
+    }, [])
+  );
 
   useEffect(() => {
     // Foreground service с типом microphone здесь НЕ запускаем: на Android 14+
@@ -66,13 +82,41 @@ export default function ProjectInfo() {
       <Stack.Screen options={{ title: 'SYSTEM_OS', headerShown: false }} />
       <StatusBar barStyle="light-content" />
       
-      <ScrollView contentContainerStyle={{ padding: 24, paddingTop: 60 }}>
-        <View className="border-l-4 border-cyan-500 pl-4 mb-10">
+      <ScrollView
+        contentContainerStyle={{ padding: 24, paddingTop: insets.top + 20 }}
+        showsVerticalScrollIndicator={false}>
+        <View className="border-l-4 border-cyan-500 pl-4 mb-8">
           <Text className="text-white text-4xl font-black tracking-tighter">MESH_VOICE</Text>
           <Text className="text-cyan-500 font-mono text-sm uppercase tracking-widest">v1.0.4 stable_build</Text>
         </View>
 
-        <View className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6 mb-10">
+        <TouchableOpacity
+          onPress={() => router.push('/profile')}
+          className="flex-row items-center bg-slate-900/50 border border-slate-800 rounded-3xl p-4 mb-4">
+          <Text className="text-3xl mr-3">{profileAvatar}</Text>
+          <View className="flex-1">
+            <Text className="text-white font-bold text-base">{profileName || 'Имя не задано'}</Text>
+            <Text className="text-slate-500 font-mono text-[10px] uppercase">Нажмите, чтобы изменить</Text>
+          </View>
+          <FontAwesome5 name="chevron-right" size={14} color="#475569" />
+        </TouchableOpacity>
+
+        <View className="flex-row gap-3 mb-8">
+          <TouchableOpacity
+            onPress={() => router.push('/two')}
+            className="flex-1 items-center bg-slate-900 border border-slate-800 rounded-2xl py-4">
+            <FontAwesome5 name="broadcast-tower" size={18} color="#22d3ee" />
+            <Text className="text-white text-[10px] font-bold uppercase mt-2">Comm Center</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => router.push('/three')}
+            className="flex-1 items-center bg-slate-900 border border-slate-800 rounded-2xl py-4">
+            <FontAwesome5 name="globe" size={18} color="#22d3ee" />
+            <Text className="text-white text-[10px] font-bold uppercase mt-2">Internet Call</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6 mb-8">
           <Text className="text-slate-500 font-mono text-[10px] mb-4 uppercase">Diagnostic_Report:</Text>
           <View className="gap-y-3">
             <StatusRow 

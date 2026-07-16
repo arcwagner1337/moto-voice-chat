@@ -1,5 +1,5 @@
-import { Stack } from 'expo-router';
-import React, { useState, useEffect, useRef } from 'react';
+import { Stack, useFocusEffect } from 'expo-router';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
 	View,
 	Text,
@@ -21,8 +21,8 @@ import { mediaDevices, RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 import io from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, AndroidCategory, AndroidColor, AndroidForegroundServiceType, EventType } from '@notifee/react-native';
+import { loadProfile, DEFAULT_SERVER_URL } from '../../lib/profile';
 
-const SERVER_URL = "http://192.168.1.57:3000";
 const RECENT_ROOMS_KEY = "@recent_rooms_list";
 const USER_NAME_KEY = "@user_custom_name";
 
@@ -41,6 +41,9 @@ export default function InternetChatRoom() {
 	const appStateRef = useRef(AppState.currentState);
 
 	const [userName, setUserName] = useState('');
+	const [nameLocked, setNameLocked] = useState(false);
+	const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
+	const serverUrlRef = useRef(DEFAULT_SERVER_URL);
 	const [roomID, setRoomID] = useState('');
 	const [recentRooms, setRecentRooms] = useState<string[]>([]);
 	const [inRoom, setInRoom] = useState(false);
@@ -69,17 +72,44 @@ export default function InternetChatRoom() {
 	useEffect(() => { inRoomRef.current = inRoom; }, [inRoom]);
 	useEffect(() => { roomIDRef.current = roomID; }, [roomID]);
 	useEffect(() => { userNameRef.current = userName; }, [userName]);
+	useEffect(() => { serverUrlRef.current = serverUrl; }, [serverUrl]);
+
+	const isMutedRef = useRef(false);
+	useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+
+	// Профиль (вкладка PROFILE): имя подставляется и блокируется,
+	// адрес сигнального сервера подхватывается при каждом фокусе вкладки.
+	const applyProfile = useCallback(async () => {
+		const profile = await loadProfile();
+		setServerUrl(profile.serverUrl);
+		serverUrlRef.current = profile.serverUrl;
+		if (profile.name) {
+			setUserName(profile.name);
+			setNameLocked(true);
+		} else {
+			setNameLocked(false);
+		}
+	}, []);
+
+	useFocusEffect(
+		useCallback(() => {
+			applyProfile();
+		}, [applyProfile])
+	);
 
 	useEffect(() => {
 		setupAll();
 		const unsubscribe = notifee.onForegroundEvent(async ({ type, detail }) => {
 			if (type === EventType.DISMISSED && detail.notification?.id === 'mesh-intercom-fgs') {
 				if (inRoomRef.current && roomIDRef.current) {
-					await rebuildNotification(roomIDRef.current);
+					await rebuildNotification(roomIDRef.current, isMutedRef.current);
 				}
 			}
 			if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'stop-call') {
 				stopAll();
+			}
+			if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'toggle-mute') {
+				toggleMute();
 			}
 		});
 
@@ -100,6 +130,14 @@ export default function InternetChatRoom() {
 			stopAll();
 		};
 	}, []);
+
+	// Обновляем текст и кнопку уведомления при смене состояния микрофона,
+	// пока мы находимся в комнате.
+	useEffect(() => {
+		if (inRoom && roomID) {
+			rebuildNotification(roomID, isMuted).catch(() => { });
+		}
+	}, [isMuted, inRoom]);
 
 	useEffect(() => {
 		if (userName) AsyncStorage.setItem(USER_NAME_KEY, userName).catch(() => { });
@@ -223,8 +261,13 @@ export default function InternetChatRoom() {
 
 	const loadPersistentData = async () => {
 		try {
-			const savedName = await AsyncStorage.getItem(USER_NAME_KEY);
-			setUserName(savedName || `Юзер-${Math.floor(Math.random() * 99)}`);
+			// Если имя задано в профиле — его подставит applyProfile, здесь не трогаем,
+			// иначе возможна гонка и перезапись профильного имени случайным.
+			const profile = await loadProfile();
+			if (!profile.name) {
+				const savedName = await AsyncStorage.getItem(USER_NAME_KEY);
+				setUserName(savedName || `Юзер-${Math.floor(Math.random() * 99)}`);
+			}
 			const savedRooms = await AsyncStorage.getItem(RECENT_ROOMS_KEY);
 			if (savedRooms) setRecentRooms(JSON.parse(savedRooms));
 		} catch (e) { }
@@ -248,7 +291,7 @@ export default function InternetChatRoom() {
 	};
 
 	const connectToSocket = (targetRoom: string) => {
-		socket.current = io(SERVER_URL, { transports: ['websocket'], reconnection: true });
+		socket.current = io(serverUrlRef.current, { transports: ['websocket'], reconnection: true });
 		socket.current.on("chat-history", (h: any[]) => setChatMessages(h.map(m => ({ ...m, isMe: m.sender === userName }))));
 		socket.current.on("signal", async (fromId: string, data: any) => {
 			try {
@@ -286,7 +329,7 @@ export default function InternetChatRoom() {
 		socket.current.emit("join-room", targetRoom, userName);
 	};
 
-	const rebuildNotification = async (target: string) => {
+	const rebuildNotification = async (target: string, muted: boolean = false) => {
 		// Android 14+ бросает SecurityException при старте FGS типа microphone
 		// без выданного RECORD_AUDIO — проверяем до запуска.
 		if (Platform.OS === 'android') {
@@ -310,7 +353,7 @@ export default function InternetChatRoom() {
 		await notifee.displayNotification({
 			id: 'mesh-intercom-fgs',
 			title: '📻 Рация MESH_VOICE active',
-			body: `Вы находитесь в канале: ${target}`,
+			body: muted ? `Микрофон выключен · канал: ${target}` : `Вы находитесь в канале: ${target}`,
 			android: {
 				channelId,
 				asForegroundService: true,
@@ -325,7 +368,11 @@ export default function InternetChatRoom() {
 				},
 				actions: [
 					{
-						title: 'Завершить',
+						title: muted ? '🎤 Включить микрофон' : '🔇 Выключить микрофон',
+						pressAction: { id: 'toggle-mute' },
+					},
+					{
+						title: '📴 Завершить',
 						pressAction: { id: 'stop-call' },
 					},
 				],
@@ -370,7 +417,7 @@ export default function InternetChatRoom() {
 				return Alert.alert("Ошибка", "Разрешите уведомления.");
 			}
 
-			await rebuildNotification(target);
+			await rebuildNotification(target, isMutedRef.current);
 
 			if (Platform.OS === 'android') {
 				InCallManager.turnScreenOn();
@@ -420,14 +467,16 @@ export default function InternetChatRoom() {
 	};
 
 	const toggleMute = () => {
-		const nextMuteState = !isMuted;
-		setIsMuted(nextMuteState);
-		InCallManager.setMicrophoneMute(nextMuteState);
-		if (localStream.current) {
-			localStream.current.getAudioTracks().forEach((t: any) => {
-				t.enabled = !nextMuteState;
-			});
-		}
+		setIsMuted(prev => {
+			const next = !prev;
+			InCallManager.setMicrophoneMute(next);
+			if (localStream.current) {
+				localStream.current.getAudioTracks().forEach((t: any) => {
+					t.enabled = !next;
+				});
+			}
+			return next;
+		});
 	};
 
 	const toggleSpeaker = () => {
@@ -484,19 +533,37 @@ export default function InternetChatRoom() {
 				<TouchableWithoutFeedback onPress={Keyboard.dismiss}>
 					<View className="flex-1 p-5">
 						{!inRoom ? (
-							<ScrollView className="flex-1 mt-10" showsVerticalScrollIndicator={false}>
-								<View className="p-6 bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl mb-6">
-									<Text className="text-cyan-400 font-bold uppercase mb-2 text-[10px] tracking-widest">Профиль</Text>
+							<ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+								<View className="mt-10 p-4 bg-slate-900 rounded-2xl border border-slate-800">
+									<Text className="text-slate-500 text-[10px] mb-1 font-bold uppercase">Ваш профиль</Text>
 									<TextInput
 										placeholder="Ваш ник"
 										placeholderTextColor="#334155"
-										className="text-white text-2xl font-bold border-b border-slate-800 pb-2 mb-4"
+										className={`font-bold text-lg border-b border-slate-800 pb-1 ${nameLocked ? 'text-slate-400' : 'text-white'}`}
 										value={userName}
 										onChangeText={setUserName}
+										editable={!nameLocked}
 									/>
+									{nameLocked && (
+										<Text className="text-cyan-600 text-[10px] mt-1">
+											🔒 Имя задано во вкладке PROFILE
+										</Text>
+									)}
+									<View className="flex-row mt-2">
+										<Text className="text-slate-500 text-xs">Сервер: </Text>
+										<TextInput
+											value={serverUrl}
+											onChangeText={setServerUrl}
+											className="text-slate-400 text-xs flex-1"
+											placeholder={DEFAULT_SERVER_URL}
+											placeholderTextColor="#333"
+											autoCapitalize="none"
+											autoCorrect={false}
+										/>
+									</View>
 								</View>
 
-								<View className="p-6 bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl mb-6">
+								<View className="p-6 bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl mt-5 mb-6">
 									<Text className="text-slate-500 text-[10px] uppercase mb-2">Название комнаты</Text>
 									<TextInput
 										placeholder="Введите ID"

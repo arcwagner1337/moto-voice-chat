@@ -80,6 +80,13 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <FontAwesome5 name="broadcast-tower" size={18} color={color} />,
         }}
       />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'PROFILE',
+          tabBarIcon: ({ color }) => <FontAwesome5 name="user-astronaut" size={18} color={color} />,
+        }}
+      />
     </Tabs>
   );
 }

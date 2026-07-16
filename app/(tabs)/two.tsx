@@ -1,5 +1,5 @@
-import { Stack } from 'expo-router';
-import React, { useState, useEffect, useRef } from 'react';
+import { Stack, useFocusEffect } from 'expo-router';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, TouchableOpacity, FlatList, Alert, Platform, PermissionsAndroid, TextInput, ScrollView, KeyboardAvoidingView, Keyboard, TouchableWithoutFeedback } from 'react-native';
 import Zeroconf from 'react-native-zeroconf';
 import InCallManager from 'react-native-incall-manager';
@@ -7,8 +7,10 @@ import { mediaDevices, RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 import TcpSocket from 'react-native-tcp-socket';
 import { useKeepAwake } from 'expo-keep-awake';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import notifee, { AndroidForegroundServiceType } from '@notifee/react-native';
+import notifee, { AndroidForegroundServiceType, EventType } from '@notifee/react-native';
 import { AppState, AppStateStatus } from 'react-native';
+import * as Network from 'expo-network';
+import { loadProfile } from '../../lib/profile';
 
 const zeroconf = new Zeroconf();
 let isSending = false;
@@ -20,7 +22,22 @@ export default function MeshChatRoom() {
 
   // Профиль
   const [userName, setUserName] = useState(`Пользователь-${Math.floor(Math.random() * 99)}`);
+  const [nameLocked, setNameLocked] = useState(false);
   const [myIp, setMyIp] = useState<string>('');
+
+  // Имя из вкладки PROFILE: если задано — подставляем и блокируем поле
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile().then((p) => {
+        if (p.name) {
+          setUserName(p.name);
+          setNameLocked(true);
+        } else {
+          setNameLocked(false);
+        }
+      });
+    }, [])
+  );
 
   // Комната
   const [roomName, setRoomName] = useState(`Комната-${Math.floor(Math.random() * 99)}`);
@@ -57,6 +74,16 @@ export default function MeshChatRoom() {
     inRoomRef.current = inRoom;
   }, [inRoom]);
 
+  const isHostRef = useRef(isHost);
+  useEffect(() => {
+    isHostRef.current = isHost;
+  }, [isHost]);
+
+  const roomNameRef = useRef(roomName);
+  useEffect(() => {
+    roomNameRef.current = roomName;
+  }, [roomName]);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -87,6 +114,30 @@ export default function MeshChatRoom() {
   const myIpRef = useRef(myIp);
   useEffect(() => { myIpRef.current = myIp; }, [myIp]);
 
+  // Обновляем текст и кнопки уведомления при смене состояния микрофона,
+  // пока мы находимся в комнате.
+  useEffect(() => {
+    if (inRoom) {
+      showCallNotification(isMuted).catch(() => { });
+    }
+  }, [isMuted, inRoom]);
+
+  // Обработчик нажатий на кнопки уведомления (выключить микрофон / покинуть чат).
+  // Регистрируется один раз: toggleMute и stopAll читают актуальное состояние
+  // через ref/функциональные обновления, поэтому безопасны для устаревшего замыкания.
+  useEffect(() => {
+    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
+      if (type === EventType.ACTION_PRESS) {
+        if (detail.pressAction?.id === 'stop-call') {
+          stopAll();
+        } else if (detail.pressAction?.id === 'toggle-mute') {
+          toggleMute();
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   useEffect(() => {
     // 1. Инициализируем приложение (запрос разрешений и получение стрима)
     initApp();
@@ -94,9 +145,7 @@ export default function MeshChatRoom() {
     // 2. ВЕШАЕМ СЛУШАТЕЛЯ ZEROCONF СТРОГО ОДИН РАЗ ТУТ
     zeroconf.on('resolved', (s : any) => {
       const ip = s.addresses?.find((a: string) => a.includes('.') && !a.startsWith('169'));
-      if (s.name === myServiceName) {
-        if (ip) setMyIp(ip);
-      } else if (ip && ip !== myIpRef.current && s.txt?.isRoom === 'true') {
+      if (ip && ip !== myIpRef.current && s.txt?.isRoom === 'true') {
         setAvailableRooms(prev => {
           const otherRooms = prev.filter(r => r.ip !== ip);
           return [...otherRooms, { name: s.txt?.roomName || s.name, ip, port: s.port, lastSeen: Date.now() }];
@@ -208,16 +257,26 @@ export default function MeshChatRoom() {
     }
     const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
     localStream.current = stream;
+
+    // Прямое определение локального IP вместо самопубликации mDNS: многие
+    // устройства не получают обратно свои же multicast-анонсы, из-за чего
+    // myIp мог никогда не устанавливаться.
+    try {
+      const ip = await Network.getIpAddressAsync();
+      if (ip && ip !== '0.0.0.0') setMyIp(ip);
+    } catch (e) {
+      console.log('Не удалось получить IP через expo-network:', e);
+    }
+
     setupDiscovery();
   };
 
 
   const setupDiscovery = () => {
     zeroconf.stop();
-    // УБРАЛИ ОТСЮДА zeroconf.on('resolved') — он теперь живёт в useEffect!
-
-    zeroconf.publishService('voicechat', 'tcp', 'local.', myServiceName, 11111);
-    setTimeout(() => { if (!isHost) zeroconf.unpublishService(myServiceName); }, 3000);
+    // Публикация собственного сервиса больше не нужна для определения IP —
+    // используется только для того, чтобы другие видели нас, когда мы хост
+    // (см. createRoom). Здесь просто слушаем чужие комнаты.
     zeroconf.scan('voicechat', 'tcp', 'local.');
   };
 
@@ -321,12 +380,14 @@ export default function MeshChatRoom() {
   };
 
   const toggleMute = () => {
-    const newState = !isMuted;
-    setIsMuted(newState);
-    if (localStream.current) {
-      localStream.current.getAudioTracks().forEach((t: any) => t.enabled = !newState);
-    }
-    Object.keys(peers.current).forEach(ip => sendSignaling(ip, { type: 'mute_status', value: newState }, activePort.current));
+    setIsMuted(prev => {
+      const next = !prev;
+      if (localStream.current) {
+        localStream.current.getAudioTracks().forEach((t: any) => t.enabled = !next);
+      }
+      Object.keys(peers.current).forEach(ip => sendSignaling(ip, { type: 'mute_status', value: next }, activePort.current));
+      return next;
+    });
   };
 
   const getOrCreatePeer = (remoteIp: string) => {
@@ -411,7 +472,7 @@ export default function MeshChatRoom() {
   };
 
   const stopAll = () => {
-    const exitSignal = isHost ? 'room_closed' : 'bye';
+    const exitSignal = isHostRef.current ? 'room_closed' : 'bye';
     Object.keys(peers.current).forEach(ip => sendSignaling(ip, { type: exitSignal }, activePort.current));
 
     stopAudioForegroundService();
@@ -428,6 +489,37 @@ export default function MeshChatRoom() {
   };
 
 
+  const showCallNotification = async (muted: boolean) => {
+    const channelId = await notifee.createChannel({
+      id: 'voice-chat-service',
+      name: 'Голосовая связь',
+      importance: 4, // High importance
+    });
+
+    await notifee.displayNotification({
+      id: 'voice-active-notification',
+      title: `Вы в комнате: ${roomNameRef.current}`,
+      body: muted ? 'Микрофон выключен' : 'Микрофон работает в фоновом режиме.',
+      android: {
+        channelId,
+        asForegroundService: true, // Обязательно для удержания фона
+        ongoing: true, // Запрещает юзеру просто смахнуть уведомление
+        foregroundServiceTypes: [AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_MICROPHONE],
+        pressAction: { id: 'default' },
+        actions: [
+          {
+            title: muted ? '🎤 Включить микрофон' : '🔇 Выключить микрофон',
+            pressAction: { id: 'toggle-mute' },
+          },
+          {
+            title: '📴 Покинуть чат',
+            pressAction: { id: 'stop-call' },
+          },
+        ],
+      },
+    });
+  };
+
   const startAudioForegroundService = async () => {
     try {
       // Android 14+ бросает SecurityException при старте FGS типа microphone
@@ -443,25 +535,7 @@ export default function MeshChatRoom() {
         }
       }
 
-      // Создаем канал уведомлений
-      const channelId = await notifee.createChannel({
-        id: 'voice-chat-service',
-        name: 'Голосовая связь',
-        importance: 4, // High importance
-      });
-
-      // Запускаем переднеплановый сервис
-      await notifee.displayNotification({
-        id: 'voice-active-notification',
-        title: `Вы в комнате: ${roomName}`,
-        body: 'Микрофон работает в фоновом режиме.',
-        android: {
-          channelId,
-          asForegroundService: true, // Обязательно для удержания фона
-          ongoing: true, // Запрещает юзеру просто смахнуть уведомление
-          foregroundServiceTypes: [128 as any], // Android 14/15 фикс
-        },
-      });
+      await showCallNotification(false);
       console.log('Foreground Service успешно запущен');
     } catch (err) {
       console.error('Не удалось запустить фоновый сервис:', err);
@@ -497,10 +571,16 @@ export default function MeshChatRoom() {
                 <View className="mt-10 p-4 bg-slate-900 rounded-2xl border border-slate-800">
                   <Text className="text-slate-500 text-[10px] mb-1 font-bold uppercase">Ваш профиль</Text>
                   <TextInput
-                    className="text-white font-bold text-lg border-b border-slate-800 pb-1"
+                    className={`font-bold text-lg border-b border-slate-800 pb-1 ${nameLocked ? 'text-slate-400' : 'text-white'}`}
                     value={userName}
                     onChangeText={setUserName}
+                    editable={!nameLocked}
                   />
+                  {nameLocked && (
+                    <Text className="text-cyan-600 text-[10px] mt-1">
+                      🔒 Имя задано во вкладке PROFILE
+                    </Text>
+                  )}
                   <View className="flex-row mt-2">
                     <Text className="text-slate-500 text-xs">IP: </Text>
                     <TextInput
@@ -646,5 +726,3 @@ export default function MeshChatRoom() {
     </View>
   );
 }
-
-// registerForegroundService вызывается один раз в app/(tabs)/_layout.tsx

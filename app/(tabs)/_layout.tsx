@@ -83,6 +83,20 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="social"
+        options={{
+          title: 'FRIENDS',
+          tabBarIcon: ({ color }) => <FontAwesome5 name="user-friends" size={18} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="chats"
+        options={{
+          title: 'CHATS',
+          tabBarIcon: ({ color }) => <FontAwesome5 name="comments" size={18} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'PROFILE',

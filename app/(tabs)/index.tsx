@@ -7,6 +7,7 @@ import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Audio } from 'expo-av';
 import { loadProfile } from '../../lib/profile';
+import ScreenHeader from '../../components/ScreenHeader';
 
 export default function ProjectInfo() {
   useKeepAwake();
@@ -83,12 +84,9 @@ export default function ProjectInfo() {
       <StatusBar barStyle="light-content" />
       
       <ScrollView
-        contentContainerStyle={{ padding: 24, paddingTop: insets.top + 20 }}
+        contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16 }}
         showsVerticalScrollIndicator={false}>
-        <View className="border-l-4 border-cyan-500 pl-4 mb-8">
-          <Text className="text-white text-4xl font-black tracking-tighter">MESH_VOICE</Text>
-          <Text className="text-cyan-500 font-mono text-sm uppercase tracking-widest">v1.0.4 stable_build</Text>
-        </View>
+        <ScreenHeader title="MESH_VOICE" subtitle="v2.0.0 dashboard" />
 
         <TouchableOpacity
           onPress={() => router.push('/profile')}

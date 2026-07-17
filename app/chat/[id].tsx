@@ -20,6 +20,7 @@ import {
   markChatRead,
 } from '../../lib/api';
 import { getSocialSocket } from '../../lib/socialSocket';
+import { setOpenChat, cancelChatNotification } from '../../lib/notifications';
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -46,6 +47,10 @@ export default function ChatScreen() {
     let active = true;
     let sock: any = null;
 
+    // Пока чат открыт — уведомления по нему не показываем, висящее гасим
+    setOpenChat(chatId);
+    cancelChatNotification(chatId);
+
     (async () => {
       const saved = await getSavedUser();
       if (!active) return;
@@ -67,6 +72,7 @@ export default function ChatScreen() {
 
     return () => {
       active = false;
+      setOpenChat(0);
       if (sock) sock.off('chat:new', onNew);
     };
   }, [chatId, onNew]);

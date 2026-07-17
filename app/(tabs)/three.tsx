@@ -22,6 +22,7 @@ import io from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, AndroidCategory, AndroidColor, AndroidForegroundServiceType, EventType } from '@notifee/react-native';
 import { loadProfile, DEFAULT_SERVER_URL } from '../../lib/profile';
+import { useVolumeDoubleTapMute } from '../../lib/useVolumeMute';
 
 const RECENT_ROOMS_KEY = "@recent_rooms_list";
 const USER_NAME_KEY = "@user_custom_name";
@@ -478,9 +479,10 @@ export default function InternetChatRoom() {
 		setCurrentMsg('');
 	};
 
-	const toggleMute = () => {
+	// Явная установка мута (используется и кнопкой, и кнопками громкости)
+	const applyMute = useCallback((next: boolean) => {
 		setIsMuted(prev => {
-			const next = !prev;
+			if (prev === next) return prev;
 			InCallManager.setMicrophoneMute(next);
 			if (localStream.current) {
 				localStream.current.getAudioTracks().forEach((t: any) => {
@@ -489,7 +491,12 @@ export default function InternetChatRoom() {
 			}
 			return next;
 		});
-	};
+	}, []);
+
+	const toggleMute = () => applyMute(!isMutedRef.current);
+
+	// Двойное нажатие "громкость −" — мут, "громкость +" — размут
+	useVolumeDoubleTapMute(inRoom, applyMute);
 
 	const toggleSpeaker = () => {
 		const newState = !isSpeaker;

@@ -25,6 +25,7 @@ import {
   openDm,
 } from '../../lib/api';
 import { getSocialSocket, closeSocialSocket } from '../../lib/socialSocket';
+import { initMessageNotifications } from '../../lib/notifications';
 import { loadProfile } from '../../lib/profile';
 
 export default function SocialScreen() {
@@ -108,7 +109,7 @@ export default function SocialScreen() {
       setUser(u);
       setPassword('');
       refresh();
-      await getSocialSocket();
+      await initMessageNotifications();
     } catch (e) {
       setError((e as Error).message);
     } finally {

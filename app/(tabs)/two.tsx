@@ -11,6 +11,7 @@ import notifee, { AndroidForegroundServiceType, EventType } from '@notifee/react
 import { AppState, AppStateStatus } from 'react-native';
 import * as Network from 'expo-network';
 import { loadProfile } from '../../lib/profile';
+import { useVolumeDoubleTapMute } from '../../lib/useVolumeMute';
 
 const zeroconf = new Zeroconf();
 let isSending = false;
@@ -379,16 +380,25 @@ export default function MeshChatRoom() {
     setCurrentMsg('');
   };
 
-  const toggleMute = () => {
+  // Явная установка мута (кнопка на экране, уведомление, кнопки громкости)
+  const applyMute = useCallback((next: boolean) => {
     setIsMuted(prev => {
-      const next = !prev;
+      if (prev === next) return prev;
       if (localStream.current) {
         localStream.current.getAudioTracks().forEach((t: any) => t.enabled = !next);
       }
       Object.keys(peers.current).forEach(ip => sendSignaling(ip, { type: 'mute_status', value: next }, activePort.current));
       return next;
     });
-  };
+  }, []);
+
+  const isMutedRef = useRef(isMuted);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+
+  const toggleMute = () => applyMute(!isMutedRef.current);
+
+  // Двойное нажатие "громкость −" — мут, "громкость +" — размут
+  useVolumeDoubleTapMute(inRoom, applyMute);
 
   const getOrCreatePeer = (remoteIp: string) => {
     if (peers.current[remoteIp]) return peers.current[remoteIp];

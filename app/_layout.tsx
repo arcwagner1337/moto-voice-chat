@@ -1,7 +1,10 @@
 import '../global.css';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Stack } from "expo-router";
+import { Stack, router } from "expo-router";
 import { View } from 'react-native';
+import { useEffect } from 'react';
+import notifee, { EventType } from '@notifee/react-native';
+import { initMessageNotifications } from '../lib/notifications';
 
 export const unstable_settings = {
   initialRouteName: "(tabs)",
@@ -9,6 +12,27 @@ export const unstable_settings = {
 
 function AppContent() {
   const insets = useSafeAreaInsets();
+
+  useEffect(() => {
+    // Уведомления о новых сообщениях (пока приложение живо: открыто или в фоне)
+    initMessageNotifications();
+
+    // Нажатие на уведомление при открытом приложении — переход в чат
+    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
+      const chatId = detail.notification?.data?.chatId;
+      if (type === EventType.PRESS && chatId) {
+        router.push(`/chat/${chatId}`);
+      }
+    });
+
+    // Приложение открыто нажатием на уведомление из фона
+    notifee.getInitialNotification().then((initial) => {
+      const chatId = initial?.notification?.data?.chatId;
+      if (chatId) router.push(`/chat/${chatId}`);
+    });
+
+    return unsubscribe;
+  }, []);
 
   return (
     // Применяем фоновый цвет и отступ снизу для всего приложения

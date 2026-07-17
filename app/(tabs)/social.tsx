@@ -10,6 +10,8 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ScreenHeader from '../../components/ScreenHeader';
 import {
   SocialUser,
   FriendsData,
@@ -29,6 +31,7 @@ import { initMessageNotifications } from '../../lib/notifications';
 import { loadProfile } from '../../lib/profile';
 
 export default function SocialScreen() {
+  const insets = useSafeAreaInsets();
   const [user, setUser] = useState<SocialUser | null>(null);
   const [checked, setChecked] = useState(false);
 
@@ -191,16 +194,11 @@ export default function SocialScreen() {
       <KeyboardAvoidingView behavior="padding" className="flex-1">
         <ScrollView
           className="flex-1"
-          contentContainerStyle={{ padding: 20, paddingTop: 60 }}
+          contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16 }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <View className="border-l-4 border-cyan-500 pl-4 mb-6">
-            <Text className="text-white text-3xl font-black tracking-tighter">FRIENDS</Text>
-            <Text className="text-cyan-500 font-mono text-xs uppercase tracking-widest">
-              rider_network
-            </Text>
-          </View>
+          <ScreenHeader title="FRIENDS" subtitle="rider_network" />
 
           {!checked ? null : !user ? (
             <View className="p-6 bg-slate-900 rounded-3xl border border-slate-800">

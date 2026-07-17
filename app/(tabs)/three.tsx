@@ -23,6 +23,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, AndroidCategory, AndroidColor, AndroidForegroundServiceType, EventType } from '@notifee/react-native';
 import { loadProfile, DEFAULT_SERVER_URL } from '../../lib/profile';
 import { useVolumeDoubleTapMute } from '../../lib/useVolumeMute';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ScreenHeader from '../../components/ScreenHeader';
 
 const RECENT_ROOMS_KEY = "@recent_rooms_list";
 const USER_NAME_KEY = "@user_custom_name";
@@ -37,6 +39,7 @@ const configuration = {
 // нажатие 'stop-call' обрабатывается через onForegroundEvent внутри компонента.
 
 export default function InternetChatRoom() {
+	const insets = useSafeAreaInsets();
 	const activeInterval = useRef<NodeJS.Timeout | null>(null);
 	const appStateRef = useRef(AppState.currentState);
 
@@ -552,8 +555,12 @@ export default function InternetChatRoom() {
 				<TouchableWithoutFeedback onPress={Keyboard.dismiss}>
 					<View className="flex-1 p-5">
 						{!inRoom ? (
-							<ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-								<View className="mt-10 p-4 bg-slate-900 rounded-2xl border border-slate-800">
+							<ScrollView
+								className="flex-1"
+								contentContainerStyle={{ paddingTop: insets.top }}
+								showsVerticalScrollIndicator={false}>
+								<ScreenHeader title="INTERNET CALL" subtitle="global_voice_link" />
+								<View className="p-4 bg-slate-900 rounded-3xl border border-slate-800">
 									<Text className="text-slate-500 text-[10px] mb-1 font-bold uppercase">Ваш профиль</Text>
 									<TextInput
 										placeholder="Ваш ник"

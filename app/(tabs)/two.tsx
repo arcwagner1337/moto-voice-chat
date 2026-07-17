@@ -12,12 +12,15 @@ import { AppState, AppStateStatus } from 'react-native';
 import * as Network from 'expo-network';
 import { loadProfile } from '../../lib/profile';
 import { useVolumeDoubleTapMute } from '../../lib/useVolumeMute';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ScreenHeader from '../../components/ScreenHeader';
 
 const zeroconf = new Zeroconf();
 let isSending = false;
 let signalQueue: { ip: string; data: any; port: number }[] = [];
 
 export default function MeshChatRoom() {
+  const insets = useSafeAreaInsets();
   // useKeepAwake();
 
 
@@ -577,8 +580,12 @@ export default function MeshChatRoom() {
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View className="flex-1 p-5">
             {!inRoom ? (
-              <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-                <View className="mt-10 p-4 bg-slate-900 rounded-2xl border border-slate-800">
+              <ScrollView
+                className="flex-1"
+                contentContainerStyle={{ paddingTop: insets.top }}
+                showsVerticalScrollIndicator={false}>
+                <ScreenHeader title="COMM_CENTER" subtitle="local_mesh_radio" />
+                <View className="p-4 bg-slate-900 rounded-3xl border border-slate-800">
                   <Text className="text-slate-500 text-[10px] mb-1 font-bold uppercase">Ваш профиль</Text>
                   <TextInput
                     className={`font-bold text-lg border-b border-slate-800 pb-1 ${nameLocked ? 'text-slate-400' : 'text-white'}`}
@@ -603,7 +610,7 @@ export default function MeshChatRoom() {
                   </View>
                 </View>
 
-                <View className="bg-slate-900 p-4 rounded-2xl mt-5 border border-slate-800">
+                <View className="bg-slate-900 p-4 rounded-3xl mt-4 border border-slate-800">
                   <TextInput
                     placeholder="Имя комнаты"
                     placeholderTextColor="#475569"

@@ -8,6 +8,8 @@ import {
   ScrollView,
   Alert,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ScreenHeader from '../../components/ScreenHeader';
 import {
   ChatSummary,
   SocialUser,
@@ -19,6 +21,7 @@ import {
 import { getSocialSocket } from '../../lib/socialSocket';
 
 export default function ChatsScreen() {
+  const insets = useSafeAreaInsets();
   const [user, setUser] = useState<SocialUser | null>(null);
   const [checked, setChecked] = useState(false);
   const [chats, setChats] = useState<ChatSummary[]>([]);
@@ -116,17 +119,12 @@ export default function ChatsScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <ScrollView
         className="flex-1"
-        contentContainerStyle={{ padding: 20, paddingTop: 60 }}
+        contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16 }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
         <View className="flex-row items-end justify-between mb-6">
-          <View className="border-l-4 border-cyan-500 pl-4">
-            <Text className="text-white text-3xl font-black tracking-tighter">CHATS</Text>
-            <Text className="text-cyan-500 font-mono text-xs uppercase tracking-widest">
-              private_comms
-            </Text>
-          </View>
+          <ScreenHeader title="CHATS" subtitle="private_comms" noMargin />
           {user && (
             <TouchableOpacity
               onPress={() => (creating ? setCreating(false) : openCreate())}

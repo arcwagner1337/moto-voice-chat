@@ -1,6 +1,6 @@
 import type { Server } from 'socket.io';
 import { verifyToken } from './auth';
-import { friendIdsOf } from './db';
+import { friendIdsOf, accumulateRideStats } from './db';
 
 let io: Server | null = null;
 
@@ -22,6 +22,27 @@ export function getLiveLocation(userId: number): LiveLocation | undefined {
   // Позиция старше 5 минут считается неактуальной
   if (loc && Date.now() - loc.updatedAt > 5 * 60 * 1000) return undefined;
   return loc;
+}
+
+// Единая обработка позиции (socket loc:update и REST /api/location):
+// сохранить, разослать друзьям, накопить статистику активных заездов.
+export function storeLocation(userId: number, data: any): boolean {
+  const loc: LiveLocation = {
+    lat: Number(data?.lat),
+    lng: Number(data?.lng),
+    speed: Math.max(0, Number(data?.speed) || 0),
+    heading: Number(data?.heading) || 0,
+    updatedAt: Date.now(),
+  };
+  if (!isFinite(loc.lat) || !isFinite(loc.lng)) return false;
+  locations.set(userId, loc);
+  accumulateRideStats(userId, loc.lat, loc.lng, loc.speed);
+  for (const fid of friendIdsOf(userId)) {
+    if (isOnline(fid)) {
+      io?.to(`user:${fid}`).emit('loc:friend', { userId, ...loc });
+    }
+  }
+  return true;
 }
 
 export function isOnline(userId: number): boolean {
@@ -82,20 +103,7 @@ export function setupRealtime(server: Server) {
     socket.on('loc:update', (data: any) => {
       const uid = socket.data.userId as number | undefined;
       if (!uid) return;
-      const loc: LiveLocation = {
-        lat: Number(data?.lat),
-        lng: Number(data?.lng),
-        speed: Math.max(0, Number(data?.speed) || 0),
-        heading: Number(data?.heading) || 0,
-        updatedAt: Date.now(),
-      };
-      if (!isFinite(loc.lat) || !isFinite(loc.lng)) return;
-      locations.set(uid, loc);
-      for (const fid of friendIdsOf(uid)) {
-        if (isOnline(fid)) {
-          server.to(`user:${fid}`).emit('loc:friend', { userId: uid, ...loc });
-        }
-      }
+      storeLocation(uid, data);
     });
 
     socket.on('loc:stop', () => {

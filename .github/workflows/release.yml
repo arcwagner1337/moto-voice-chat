@@ -66,8 +66,12 @@ jobs:
           if [ -n "$KEY_PASSWORD" ]; then
             ARGS+=(--key-pass env:KEY_PASSWORD)
           fi
-          "$BUILD_TOOLS/apksigner" sign "${ARGS[@]}" \
-            android/app/build/outputs/apk/release/app-release.apk
+          if "$BUILD_TOOLS/apksigner" sign "${ARGS[@]}" \
+            android/app/build/outputs/apk/release/app-release.apk </dev/null; then
+            echo "APK переподписан production-ключом"
+          else
+            echo "::warning::Переподпись не удалась (проверьте секрет ANDROID_KEY_PASSWORD — пароль ключа, не keystore). APK выложен с debug-подписью."
+          fi
           rm -f release.keystore
 
       - name: Verify APK signature

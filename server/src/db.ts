@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS rides (
   name        TEXT    NOT NULL,
   created_by  INTEGER NOT NULL REFERENCES users(id),
   status      TEXT    NOT NULL CHECK (status IN ('active', 'finished')),
+  track       TEXT,
   created_at  INTEGER NOT NULL,
   finished_at INTEGER
 );
@@ -69,6 +70,10 @@ CREATE TABLE IF NOT EXISTS ride_members (
   max_speed  REAL    NOT NULL DEFAULT 0,
   avg_speed  REAL    NOT NULL DEFAULT 0,
   duration   INTEGER NOT NULL DEFAULT 0,
+  checkpoint INTEGER NOT NULL DEFAULT 0,
+  last_lat   REAL,
+  last_lng   REAL,
+  last_ts    INTEGER,
   updated_at INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (ride_id, user_id)
 );
@@ -78,11 +83,86 @@ CREATE INDEX IF NOT EXISTS idx_friendships_to ON friendships(to_id, status);
 CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status);
 `);
 
-// Миграция для баз, созданных до появления счётчика непрочитанных
-try {
-  db.exec('ALTER TABLE chat_members ADD COLUMN last_read_id INTEGER NOT NULL DEFAULT 0');
-} catch {
-  // колонка уже есть
+// Миграции для баз, созданных до появления новых колонок
+const migrations = [
+  'ALTER TABLE chat_members ADD COLUMN last_read_id INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE rides ADD COLUMN track TEXT',
+  'ALTER TABLE ride_members ADD COLUMN checkpoint INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE ride_members ADD COLUMN last_lat REAL',
+  'ALTER TABLE ride_members ADD COLUMN last_lng REAL',
+  'ALTER TABLE ride_members ADD COLUMN last_ts INTEGER',
+];
+for (const m of migrations) {
+  try {
+    db.exec(m);
+  } catch {
+    // колонка уже есть
+  }
+}
+
+export function haversineMeters(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number }
+): number {
+  const R = 6371000;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+// Накопление статистики заезда по входящей позиции. Вызывается на каждый
+// location-апдейт (сокет или REST) — работает одинаково для переднего
+// плана и фонового трекинга.
+export function accumulateRideStats(userId: number, lat: number, lng: number, speedKmh: number) {
+  const memberships: any[] = db
+    .prepare(
+      `SELECT m.*, r.track FROM ride_members m
+       JOIN rides r ON r.id = m.ride_id
+       WHERE m.user_id = ? AND r.status = 'active'`
+    )
+    .all(userId);
+
+  const nowTs = Date.now();
+  for (const m of memberships) {
+    let distance = m.distance as number;
+    let checkpoint = m.checkpoint as number;
+
+    if (m.last_lat != null && m.last_lng != null) {
+      const d = haversineMeters({ lat: m.last_lat, lng: m.last_lng }, { lat, lng });
+      // отсекаем дрожание GPS (<1м) и телепорты (>500м между тиками)
+      if (d > 1 && d < 500) distance += d;
+    }
+
+    // Прогресс по трассе: чекпоинт засчитывается в радиусе 60 метров
+    if (m.track) {
+      try {
+        const points: { lat: number; lng: number }[] = JSON.parse(m.track);
+        while (
+          checkpoint < points.length &&
+          haversineMeters(points[checkpoint], { lat, lng }) < 60
+        ) {
+          checkpoint++;
+        }
+      } catch {}
+    }
+
+    const duration = Math.max(0, Math.round((nowTs - m.joined_at) / 1000));
+    const maxSpeed = Math.max(m.max_speed, Math.min(speedKmh, 350));
+    const avgSpeed = duration > 30 ? distance / 1000 / (duration / 3600) : 0;
+
+    db.prepare(
+      `UPDATE ride_members
+       SET distance = ?, max_speed = ?, avg_speed = ?, duration = ?, checkpoint = ?,
+           last_lat = ?, last_lng = ?, last_ts = ?, updated_at = ?
+       WHERE ride_id = ? AND user_id = ?`
+    ).run(
+      distance, maxSpeed, Math.round(avgSpeed * 10) / 10, duration, checkpoint,
+      lat, lng, nowTs, nowTs, m.ride_id, userId
+    );
+  }
 }
 
 export type PublicUser = {

@@ -5,6 +5,9 @@ import { View } from 'react-native';
 import { useEffect } from 'react';
 import notifee, { EventType } from '@notifee/react-native';
 import { initMessageNotifications } from '../lib/notifications';
+// Регистрация фонового таска геолокации — обязана произойти при старте
+// приложения, в том числе когда Android будит его в фоне ради координат
+import '../lib/backgroundLocation';
 
 export const unstable_settings = {
   initialRouteName: "(tabs)",

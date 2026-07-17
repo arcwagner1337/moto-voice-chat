@@ -8,17 +8,23 @@ import ScreenHeader from '../../components/ScreenHeader';
 import {
   SocialUser,
   RideInfo,
+  TrackPoint,
   getSavedUser,
   getFriendLocations,
   getActiveRides,
   createRide,
   joinRide,
   getRide,
-  sendRideStats,
   finishRide,
+  setRideTrack,
 } from '../../lib/api';
 import { getSocialSocket } from '../../lib/socialSocket';
-import { useLiveLocation, haversine, GeoPoint } from '../../lib/useLiveLocation';
+import { useLiveLocation, GeoPoint } from '../../lib/useLiveLocation';
+import {
+  startBackgroundTracking,
+  stopBackgroundTracking,
+  isBackgroundTrackingActive,
+} from '../../lib/backgroundLocation';
 import { MAP_HTML } from '../../lib/mapHtml';
 
 type MarkerData = {
@@ -38,6 +44,7 @@ export default function MapScreen() {
 
   const [user, setUser] = useState<SocialUser | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [bgTracking, setBgTracking] = useState(false);
   const [myPos, setMyPos] = useState<GeoPoint | null>(null);
   const friendMarkers = useRef<{ [id: number]: MarkerData }>({});
 
@@ -45,8 +52,16 @@ export default function MapScreen() {
   const [rides, setRides] = useState<RideInfo[]>([]);
   const [activeRide, setActiveRide] = useState<RideInfo | null>(null);
   const [rideName, setRideName] = useState('');
-  const stats = useRef({ distance: 0, maxSpeed: 0, startTs: 0, lastPoint: null as GeoPoint | null });
-  const [statsTick, setStatsTick] = useState(0);
+
+  // Разметка трассы (только организатор)
+  const [editingTrack, setEditingTrack] = useState(false);
+  const [draftTrack, setDraftTrack] = useState<TrackPoint[]>([]);
+  const editingRef = useRef(false);
+  useEffect(() => {
+    editingRef.current = editingTrack;
+    webRef.current?.injectJavaScript(`window.setTapMode && window.setTapMode(${editingTrack}); true;`);
+  }, [editingTrack]);
+
   const activeRideRef = useRef<RideInfo | null>(null);
   useEffect(() => {
     activeRideRef.current = activeRide;
@@ -55,7 +70,23 @@ export default function MapScreen() {
   // ---------- Карта ----------
 
   const pushMarkers = useCallback(() => {
-    const list: MarkerData[] = Object.values(friendMarkers.current);
+    const byId: { [id: string]: MarkerData } = {};
+    for (const m of Object.values(friendMarkers.current)) byId[m.id] = m;
+    // Участники активного заезда (могут не быть друзьями)
+    if (activeRideRef.current) {
+      for (const e of activeRideRef.current.leaderboard) {
+        if (e.user.id === user?.id || !e.location) continue;
+        byId[String(e.user.id)] = {
+          id: String(e.user.id),
+          lat: e.location.lat,
+          lng: e.location.lng,
+          avatar: e.user.avatar,
+          name: e.user.displayName,
+          speed: e.location.speed,
+        };
+      }
+    }
+    const list = Object.values(byId);
     if (myPos) {
       list.push({
         id: 'me',
@@ -74,7 +105,28 @@ export default function MapScreen() {
 
   useEffect(() => {
     pushMarkers();
-  }, [pushMarkers, statsTick]);
+  }, [pushMarkers, activeRide]);
+
+  // Трасса на карте: пунктирный черновик в режиме разметки, иначе — трасса заезда
+  const pushTrack = useCallback(() => {
+    const points = editingRef.current ? draftTrack : activeRideRef.current?.track || [];
+    webRef.current?.injectJavaScript(
+      `window.setTrack && window.setTrack(${JSON.stringify(points)}, ${editingRef.current}); true;`
+    );
+  }, [draftTrack]);
+
+  useEffect(() => {
+    pushTrack();
+  }, [pushTrack, activeRide, editingTrack]);
+
+  const onWebViewMessage = (event: any) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === 'tap' && editingRef.current) {
+        setDraftTrack((prev) => (prev.length >= 50 ? prev : [...prev, { lat: msg.lat, lng: msg.lng }]));
+      }
+    } catch {}
+  };
 
   const refreshFriendLocations = useCallback(async () => {
     try {
@@ -94,43 +146,23 @@ export default function MapScreen() {
     } catch {}
   }, [pushMarkers]);
 
-  // ---------- GPS: точка → маркер + статистика заезда ----------
+  // ---------- GPS ----------
 
   const onPoint = useCallback((p: GeoPoint) => {
     setMyPos(p);
-    const s = stats.current;
-    if (activeRideRef.current) {
-      if (s.lastPoint) {
-        const d = haversine(s.lastPoint, p);
-        // отбрасываем GPS-скачки (>200м за тик — телепорт, не езда)
-        if (d > 1 && d < 200) s.distance += d;
-      }
-      if (p.speedKmh > s.maxSpeed && p.speedKmh < 350) s.maxSpeed = p.speedKmh;
-      s.lastPoint = p;
-      setStatsTick((t) => t + 1);
-    }
   }, []);
 
   useLiveLocation(sharing, onPoint);
 
-  // Периодическая отправка статистики + обновление лидерборда
+  // Обновление заезда каждые 5 секунд (статистику считает сервер)
   useEffect(() => {
     if (!activeRide) return;
     const timer = setInterval(async () => {
-      const s = stats.current;
-      const duration = s.startTs ? Math.round((Date.now() - s.startTs) / 1000) : 0;
-      const avgSpeed = duration > 30 ? s.distance / 1000 / (duration / 3600) : 0;
-      sendRideStats(activeRide.id, {
-        distance: Math.round(s.distance),
-        maxSpeed: Math.round(s.maxSpeed),
-        avgSpeed: Math.round(avgSpeed * 10) / 10,
-        duration,
-      });
       try {
         const fresh = await getRide(activeRide.id);
         if (fresh.status === 'finished') {
           setActiveRide(null);
-          Alert.alert('Заезд завершён', `«${fresh.name}» — смотрите итоги в списке`);
+          Alert.alert('Заезд завершён', `«${fresh.name}» — итоги зафиксированы`);
           refreshRides();
         } else {
           setActiveRide(fresh);
@@ -168,12 +200,17 @@ export default function MapScreen() {
         delete friendMarkers.current[l.userId];
         pushMarkers();
       };
-      const onRidesUpdate = () => refreshRides();
+      const onRidesUpdate = () => {
+        refreshRides();
+        const cur = activeRideRef.current;
+        if (cur) getRide(cur.id).then(setActiveRide).catch(() => {});
+      };
 
       (async () => {
         const saved = await getSavedUser();
         if (!active) return;
         setUser(saved);
+        setBgTracking(await isBackgroundTrackingActive());
         if (saved) {
           refreshFriendLocations();
           refreshRides();
@@ -199,12 +236,25 @@ export default function MapScreen() {
 
   // ---------- Действия ----------
 
+  const toggleBgTracking = async () => {
+    if (bgTracking) {
+      await stopBackgroundTracking();
+      setBgTracking(false);
+    } else {
+      const ok = await startBackgroundTracking();
+      setBgTracking(ok);
+      if (ok) setSharing(true);
+    }
+  };
+
   const startRide = async () => {
     if (!rideName.trim()) return Alert.alert('Ошибка', 'Введите название заезда');
     try {
       const ride = await createRide(rideName.trim());
       setRideName('');
-      beginTracking(ride);
+      setActiveRide(ride);
+      setSharing(true);
+      refreshRides();
     } catch (e) {
       Alert.alert('Ошибка', (e as Error).message);
     }
@@ -212,21 +262,17 @@ export default function MapScreen() {
 
   const join = async (ride: RideInfo) => {
     try {
-      beginTracking(await joinRide(ride.id));
+      setActiveRide(await joinRide(ride.id));
+      setSharing(true);
+      refreshRides();
     } catch (e) {
       Alert.alert('Ошибка', (e as Error).message);
     }
   };
 
-  const beginTracking = (ride: RideInfo) => {
-    stats.current = { distance: 0, maxSpeed: 0, startTs: Date.now(), lastPoint: null };
-    setActiveRide(ride);
-    setSharing(true);
-    refreshRides();
-  };
-
   const leaveRide = () => {
     setActiveRide(null);
+    setEditingTrack(false);
     refreshRides();
   };
 
@@ -241,6 +287,7 @@ export default function MapScreen() {
           try {
             await finishRide(activeRide.id);
             setActiveRide(null);
+            setEditingTrack(false);
             refreshRides();
           } catch (e) {
             Alert.alert('Ошибка', (e as Error).message);
@@ -248,6 +295,22 @@ export default function MapScreen() {
         },
       },
     ]);
+  };
+
+  const beginEditTrack = () => {
+    setDraftTrack(activeRide?.track || []);
+    setEditingTrack(true);
+  };
+
+  const saveTrack = async () => {
+    if (!activeRide) return;
+    try {
+      const fresh = await setRideTrack(activeRide.id, draftTrack);
+      setActiveRide(fresh);
+      setEditingTrack(false);
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    }
   };
 
   const centerOnMe = () => {
@@ -263,8 +326,9 @@ export default function MapScreen() {
     return h > 0 ? `${h}ч ${m}м` : `${m} мин`;
   };
 
-  const s = stats.current;
-  const myDuration = s.startTs ? Math.round((Date.now() - s.startTs) / 1000) : 0;
+  const isOrganizer = !!activeRide && activeRide.creator?.id === user?.id;
+  const myEntry = activeRide?.leaderboard.find((e) => e.user.id === user?.id);
+  const hasTrack = !!activeRide?.track?.length;
 
   return (
     <View className="flex-1 bg-slate-950">
@@ -284,13 +348,21 @@ export default function MapScreen() {
       ) : (
         <>
           {/* Карта */}
-          <View className="mx-5 rounded-3xl overflow-hidden border border-slate-800" style={{ height: '38%' }}>
+          <View
+            className="mx-5 rounded-3xl overflow-hidden border border-slate-800"
+            style={{ height: '34%' }}
+          >
             <WebView
               ref={webRef}
               source={{ html: MAP_HTML }}
               originWhitelist={['*']}
               javaScriptEnabled
               domStorageEnabled
+              onMessage={onWebViewMessage}
+              onLoadEnd={() => {
+                pushMarkers();
+                pushTrack();
+              }}
               style={{ backgroundColor: '#020617' }}
             />
             <TouchableOpacity
@@ -299,20 +371,38 @@ export default function MapScreen() {
             >
               <Text className="text-base">🎯</Text>
             </TouchableOpacity>
+            {editingTrack && (
+              <View className="absolute top-3 left-3 right-3 bg-slate-900/95 border border-cyan-500/50 rounded-xl p-2">
+                <Text className="text-cyan-400 text-[10px] font-bold text-center">
+                  Тапайте по карте — точки станут чекпоинтами ({draftTrack.length}/50)
+                </Text>
+              </View>
+            )}
           </View>
 
-          {/* Шаринг позиции */}
-          <TouchableOpacity
-            onPress={() => setSharing((v) => !v)}
-            className={`mx-5 mt-3 p-3 rounded-2xl border flex-row items-center justify-center ${
-              sharing ? 'bg-cyan-500/10 border-cyan-500/50' : 'bg-slate-900 border-slate-800'
-            }`}
-          >
-            <Text className="text-base mr-2">📡</Text>
-            <Text className={`font-bold text-[11px] uppercase ${sharing ? 'text-cyan-400' : 'text-slate-400'}`}>
-              {sharing ? 'Позиция транслируется друзьям' : 'Делиться позицией: выкл'}
-            </Text>
-          </TouchableOpacity>
+          {/* Тумблеры трансляции */}
+          <View className="mx-5 mt-3 flex-row gap-2">
+            <TouchableOpacity
+              onPress={() => setSharing((v) => !v)}
+              className={`flex-1 p-3 rounded-2xl border items-center ${
+                sharing ? 'bg-cyan-500/10 border-cyan-500/50' : 'bg-slate-900 border-slate-800'
+              }`}
+            >
+              <Text className={`font-bold text-[10px] uppercase ${sharing ? 'text-cyan-400' : 'text-slate-400'}`}>
+                📡 Позиция: {sharing ? 'вкл' : 'выкл'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={toggleBgTracking}
+              className={`flex-1 p-3 rounded-2xl border items-center ${
+                bgTracking ? 'bg-violet-500/10 border-violet-500/50' : 'bg-slate-900 border-slate-800'
+              }`}
+            >
+              <Text className={`font-bold text-[10px] uppercase ${bgTracking ? 'text-violet-400' : 'text-slate-400'}`}>
+                🌙 Фон: {bgTracking ? 'вкл' : 'выкл'}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           <ScrollView
             className="flex-1 mt-3"
@@ -320,15 +410,17 @@ export default function MapScreen() {
             showsVerticalScrollIndicator={false}
           >
             {activeRide ? (
-              <View className="p-4 bg-slate-900 rounded-3xl border border-cyan-500/40">
+              <View className={`p-4 bg-slate-900 rounded-3xl border ${hasTrack ? 'border-violet-500/40' : 'border-cyan-500/40'}`}>
                 <View className="flex-row justify-between items-center mb-3">
-                  <View>
+                  <View className="flex-1 mr-2">
                     <Text className="text-cyan-400 font-bold uppercase text-[10px] tracking-widest">
-                      Заезд идёт
+                      {hasTrack ? '🏆 Соревнование' : 'Заезд идёт'} · {activeRide.creator?.displayName}
                     </Text>
-                    <Text className="text-white text-xl font-black">🏁 {activeRide.name}</Text>
+                    <Text className="text-white text-xl font-black" numberOfLines={1}>
+                      🏁 {activeRide.name}
+                    </Text>
                   </View>
-                  {activeRide.creator?.id === user.id ? (
+                  {isOrganizer ? (
                     <TouchableOpacity
                       onPress={finish}
                       className="bg-red-500/10 px-4 py-2 rounded-full border border-red-500/40"
@@ -345,20 +437,63 @@ export default function MapScreen() {
                   )}
                 </View>
 
-                {/* Моя статистика */}
+                {/* Панель организатора: разметка трассы */}
+                {isOrganizer && (
+                  <View className="flex-row gap-2 mb-3">
+                    {!editingTrack ? (
+                      <TouchableOpacity
+                        onPress={beginEditTrack}
+                        className="flex-1 p-3 rounded-2xl border border-violet-500/40 bg-violet-500/10 items-center"
+                      >
+                        <Text className="text-violet-400 font-bold text-[10px] uppercase">
+                          🛣 {hasTrack ? 'Изменить трассу' : 'Разметить трассу'}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <>
+                        <TouchableOpacity
+                          onPress={saveTrack}
+                          className="flex-1 p-3 rounded-2xl bg-cyan-600 items-center"
+                        >
+                          <Text className="text-white font-bold text-[10px] uppercase">
+                            ✓ Сохранить ({draftTrack.length})
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => setDraftTrack([])}
+                          className="p-3 px-4 rounded-2xl border border-slate-700 bg-slate-800 items-center"
+                        >
+                          <Text className="text-slate-300 font-bold text-[10px] uppercase">Очистить</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => setEditingTrack(false)}
+                          className="p-3 px-4 rounded-2xl border border-slate-700 bg-slate-800 items-center"
+                        >
+                          <Text className="text-slate-300 font-bold text-[10px] uppercase">✕</Text>
+                        </TouchableOpacity>
+                      </>
+                    )}
+                  </View>
+                )}
+
+                {/* Моя статистика (считает сервер) */}
                 <View className="flex-row gap-2 mb-4">
-                  <StatBox label="Дистанция" value={fmtDist(s.distance)} />
-                  <StatBox label="Макс" value={`${Math.round(s.maxSpeed)} км/ч`} />
-                  <StatBox
-                    label="Средняя"
-                    value={`${myDuration > 30 ? (s.distance / 1000 / (myDuration / 3600)).toFixed(0) : 0} км/ч`}
-                  />
-                  <StatBox label="Время" value={fmtDur(myDuration)} />
+                  <StatBox label="Дистанция" value={fmtDist(myEntry?.distance || 0)} />
+                  {hasTrack ? (
+                    <StatBox
+                      label="Чекпоинты"
+                      value={`${myEntry?.checkpoint || 0}/${activeRide.track!.length}`}
+                    />
+                  ) : (
+                    <StatBox label="Средняя" value={`${Math.round(myEntry?.avgSpeed || 0)} км/ч`} />
+                  )}
+                  <StatBox label="Макс" value={`${Math.round(myEntry?.maxSpeed || 0)} км/ч`} />
+                  <StatBox label="Время" value={fmtDur(myEntry?.duration || 0)} />
                 </View>
 
                 {/* Лидерборд */}
                 <Text className="text-slate-500 text-[10px] uppercase font-bold mb-2">
-                  Таблица лидеров
+                  Таблица лидеров {hasTrack ? '· по чекпоинтам' : '· по дистанции'}
                 </Text>
                 {activeRide.leaderboard.map((e) => (
                   <View
@@ -382,9 +517,18 @@ export default function MapScreen() {
                         макс {Math.round(e.maxSpeed)} · сред {Math.round(e.avgSpeed)} км/ч
                       </Text>
                     </View>
-                    <Text className="text-cyan-400 font-mono font-bold text-sm">
-                      {fmtDist(e.distance)}
-                    </Text>
+                    {hasTrack ? (
+                      <View className="items-end">
+                        <Text className="text-violet-400 font-mono font-bold text-sm">
+                          CP {e.checkpoint}/{activeRide.track!.length}
+                        </Text>
+                        <Text className="text-slate-500 font-mono text-[10px]">{fmtDist(e.distance)}</Text>
+                      </View>
+                    ) : (
+                      <Text className="text-cyan-400 font-mono font-bold text-sm">
+                        {fmtDist(e.distance)}
+                      </Text>
+                    )}
                   </View>
                 ))}
               </View>
@@ -410,6 +554,10 @@ export default function MapScreen() {
                       <Text className="text-white font-bold text-lg">🏁</Text>
                     </TouchableOpacity>
                   </View>
+                  <Text className="text-slate-500 text-[10px] mt-2 leading-4">
+                    Создатель становится организатором: может разметить трассу с чекпоинтами и
+                    завершить заезд. С трассой лидерборд считается по чекпоинтам.
+                  </Text>
                 </View>
 
                 {/* Активные заезды друзей */}
@@ -424,10 +572,13 @@ export default function MapScreen() {
                         className="flex-row items-center p-3 bg-slate-950 rounded-2xl border border-slate-800 mb-1.5"
                       >
                         <View className="flex-1">
-                          <Text className="text-white font-bold">🏁 {r.name}</Text>
+                          <Text className="text-white font-bold">
+                            {r.track?.length ? '🏆' : '🏁'} {r.name}
+                          </Text>
                           <Text className="text-slate-500 font-mono text-[10px]">
                             {r.creator?.avatar} {r.creator?.displayName} · участников:{' '}
                             {r.leaderboard.length}
+                            {r.track?.length ? ` · трасса: ${r.track.length} CP` : ''}
                           </Text>
                         </View>
                         <TouchableOpacity

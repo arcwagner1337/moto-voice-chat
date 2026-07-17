@@ -178,6 +178,8 @@ export type FriendLocation = {
   user: SocialUser;
 };
 
+export type TrackPoint = { lat: number; lng: number };
+
 export type LeaderboardEntry = {
   place: number;
   user: SocialUser;
@@ -185,6 +187,7 @@ export type LeaderboardEntry = {
   maxSpeed: number; // км/ч
   avgSpeed: number; // км/ч
   duration: number; // секунды
+  checkpoint: number;
   updatedAt: number;
   location: { lat: number; lng: number; speed: number; updatedAt: number } | null;
 };
@@ -196,6 +199,7 @@ export type RideInfo = {
   createdAt: number;
   finishedAt: number | null;
   creator: SocialUser;
+  track: TrackPoint[] | null;
   leaderboard: LeaderboardEntry[];
   amMember?: boolean;
 };
@@ -222,6 +226,12 @@ export const sendRideStats = (
 
 export const finishRide = (rideId: number) =>
   request<{ ride: RideInfo }>(`/rides/${rideId}/finish`, { method: 'POST' }).then((d) => d.ride);
+
+export const setRideTrack = (rideId: number, points: TrackPoint[]) =>
+  request<{ ride: RideInfo }>(`/rides/${rideId}/track`, {
+    method: 'POST',
+    body: { points },
+  }).then((d) => d.ride);
 
 // Обновить имя/аватар аккаунта (вызывается при сохранении вкладки PROFILE)
 export const updateMe = async (displayName: string, avatar: string) => {

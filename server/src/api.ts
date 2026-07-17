@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Response } from 'express';
 import { db, publicUser, getUserById, areFriends, isChatMember, friendIdsOf, PublicUser } from './db';
 import { hashPassword, checkPassword, signToken, requireAuth, AuthedRequest } from './auth';
-import { isOnline, notifyUser, getLiveLocation } from './realtime';
+import { isOnline, notifyUser, getLiveLocation, storeLocation } from './realtime';
 
 export const api = Router();
 
@@ -315,6 +315,16 @@ api.post('/chats/:id/read', requireAuth, (req, res) => {
 
 // ---------- Позиции друзей ----------
 
+// Приём позиции по REST — используется фоновым трекингом (сокет в фоне
+// может быть мёртв, обычный fetch надёжнее)
+api.post('/location', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  if (!storeLocation(userId, req.body)) {
+    return res.status(400).json({ error: 'Некорректные координаты' });
+  }
+  res.json({ ok: true });
+});
+
 api.get('/locations', requireAuth, (req, res) => {
   const userId = (req as AuthedRequest).userId;
   const result: any[] = [];
@@ -352,11 +362,23 @@ function rideInfo(rideId: number) {
     .prepare(
       `SELECT m.*, u.username, u.display_name, u.avatar FROM ride_members m
        JOIN users u ON u.id = m.user_id
-       WHERE m.ride_id = ?
-       ORDER BY m.distance DESC, m.max_speed DESC`
+       WHERE m.ride_id = ?`
     )
     .all(rideId);
   const creator = getUserById(ride.created_by);
+
+  let track: { lat: number; lng: number }[] | null = null;
+  try {
+    if (ride.track) track = JSON.parse(ride.track);
+  } catch {}
+
+  // С трассой соревнуемся по чекпоинтам, без — по дистанции
+  members.sort((a, b) =>
+    track
+      ? b.checkpoint - a.checkpoint || b.distance - a.distance
+      : b.distance - a.distance || b.max_speed - a.max_speed
+  );
+
   return {
     id: ride.id,
     name: ride.name,
@@ -364,6 +386,7 @@ function rideInfo(rideId: number) {
     createdAt: ride.created_at,
     finishedAt: ride.finished_at,
     creator,
+    track,
     leaderboard: members.map((m, idx) => ({
       place: idx + 1,
       user: {
@@ -377,6 +400,7 @@ function rideInfo(rideId: number) {
       maxSpeed: m.max_speed,
       avgSpeed: m.avg_speed,
       duration: m.duration,
+      checkpoint: m.checkpoint,
       updatedAt: m.updated_at,
       location: getLiveLocation(m.user_id) || null,
     })),
@@ -442,6 +466,31 @@ api.post('/rides/:id/join', requireAuth, (req, res) => {
     db.prepare('INSERT INTO ride_members (ride_id, user_id, joined_at) VALUES (?, ?, ?)')
       .run(rideId, userId, now());
   }
+  res.json({ ride: rideInfo(rideId) });
+});
+
+// Организатор размечает трассу (массив чекпоинтов). Пустой массив — убрать.
+api.post('/rides/:id/track', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const rideId = Number(req.params.id);
+  const ride: any = db.prepare('SELECT * FROM rides WHERE id = ?').get(rideId);
+  if (!ride || ride.status !== 'active') return res.status(404).json({ error: 'Заезд не активен' });
+  if (ride.created_by !== userId) {
+    return res.status(403).json({ error: 'Трассу задаёт только организатор' });
+  }
+  const raw = Array.isArray(req.body?.points) ? req.body.points : [];
+  const points = raw
+    .slice(0, 50)
+    .map((p: any) => ({ lat: Number(p?.lat), lng: Number(p?.lng) }))
+    .filter((p: any) => isFinite(p.lat) && isFinite(p.lng));
+  db.prepare('UPDATE rides SET track = ? WHERE id = ?').run(
+    points.length ? JSON.stringify(points) : null,
+    rideId
+  );
+  // Прогресс пересчитываем с нуля при смене трассы
+  db.prepare('UPDATE ride_members SET checkpoint = 0 WHERE ride_id = ?').run(rideId);
+  const members: any[] = db.prepare('SELECT user_id FROM ride_members WHERE ride_id = ?').all(rideId);
+  for (const m of members) notifyUser(m.user_id, 'rides:update', {});
   res.json({ ride: rideInfo(rideId) });
 });
 

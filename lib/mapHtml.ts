@@ -17,6 +17,11 @@ export const MAP_HTML = `<!DOCTYPE html>
   }
   .mk.me .nm { color: #22d3ee; border-color: #22d3ee; }
   .mk .sp { font: 9px monospace; color: #22d3ee; background: rgba(2,6,23,.85); border-radius: 6px; padding: 0 4px; margin-top: 1px; }
+  .cp {
+    width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font: bold 11px monospace; color: #020617; background: #22d3ee; border: 2px solid #0e7490;
+    transform: translate(-11px, -11px);
+  }
   .leaflet-control-attribution { background: rgba(2,6,23,.7) !important; color: #475569 !important; }
   .leaflet-control-attribution a { color: #64748b !important; }
 </style>
@@ -57,8 +62,40 @@ export const MAP_HTML = `<!DOCTYPE html>
   }
 
   function centerOn(lat, lng) { map.setView([lat, lng], 15); }
+
+  // Трасса заезда: линия + нумерованные чекпоинты. draft=true — пунктир (режим разметки)
+  var trackLayer = null;
+  function setTrack(points, draft) {
+    if (trackLayer) { map.removeLayer(trackLayer); trackLayer = null; }
+    if (!points || !points.length) return;
+    var g = L.layerGroup();
+    if (points.length > 1) {
+      g.addLayer(L.polyline(points.map(function (p) { return [p.lat, p.lng]; }), {
+        color: '#22d3ee', weight: 3, opacity: 0.8, dashArray: draft ? '6 8' : null
+      }));
+    }
+    points.forEach(function (p, i) {
+      g.addLayer(L.marker([p.lat, p.lng], {
+        icon: L.divIcon({ html: '<div class="cp">' + (i + 1) + '</div>', className: '', iconSize: null })
+      }));
+    });
+    trackLayer = g;
+    g.addTo(map);
+  }
+
+  // Режим разметки: тапы по карте уходят в приложение
+  var tapMode = false;
+  function setTapMode(on) { tapMode = on; }
+  map.on('click', function (e) {
+    if (tapMode && window.ReactNativeWebView) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'tap', lat: e.latlng.lat, lng: e.latlng.lng }));
+    }
+  });
+
   window.updateMarkers = updateMarkers;
   window.centerOn = centerOn;
+  window.setTrack = setTrack;
+  window.setTapMode = setTapMode;
 </script>
 </body>
 </html>`;

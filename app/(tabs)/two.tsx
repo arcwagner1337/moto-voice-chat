@@ -256,11 +256,16 @@ export default function MeshChatRoom() {
 
   const initApp = async () => {
     if (Platform.OS === 'android') {
-      await PermissionsAndroid.requestMultiple([
+      const perms: any[] = [
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         'android.permission.MANAGE_OWN_CALLS' as any,
-      ]);
+      ];
+      // Android 12+: без BLUETOOTH_CONNECT звук не пойдёт в BT-гарнитуру шлема
+      if (Number(Platform.Version) >= 31) {
+        perms.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+      }
+      await PermissionsAndroid.requestMultiple(perms);
     }
     const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
     localStream.current = stream;

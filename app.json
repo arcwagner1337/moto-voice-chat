@@ -20,7 +20,15 @@
       "./plugins/withNotifeeForegroundServiceType.js",
       "expo-audio",
       "expo-asset",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Геопозиция нужна, чтобы показывать вас на карте друзей и считать статистику заездов.",
+          "locationAlwaysAndWhenInUsePermission": "Фоновая геопозиция нужна, чтобы трекинг заезда продолжался при выключенном экране.",
+          "isAndroidBackgroundLocationEnabled": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
@@ -44,13 +52,16 @@
       "infoPlist": {
         "UIBackgroundModes": [
           "audio",
-          "voip"
+          "voip",
+          "location"
         ],
         "NSMicrophoneUsageDescription": "Микрофон нужен для голосовой связи с другими участниками.",
         "NSLocalNetworkUsageDescription": "Доступ к локальной сети нужен для поиска участников рядом (mesh-режим COMM_CENTER).",
         "NSBonjourServices": [
           "_voicechat._tcp"
-        ]
+        ],
+        "NSLocationWhenInUseUsageDescription": "Геопозиция нужна, чтобы показывать вас на карте друзей и считать статистику заездов.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Фоновая геопозиция нужна, чтобы трекинг заезда продолжался при выключенном экране."
       }
     },
     "android": {
@@ -63,8 +74,14 @@
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
         "android.permission.POST_NOTIFICATIONS",
-        "android.permission.WAKE_LOCK"
+        "android.permission.WAKE_LOCK",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE"
       ],
       "package": "com.anonymous.myapp"
     }

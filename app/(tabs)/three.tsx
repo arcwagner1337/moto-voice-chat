@@ -170,10 +170,15 @@ export default function InternetChatRoom() {
 	const initApp = async () => {
 		if (Platform.OS === 'android') {
 			try {
-				const granted = await PermissionsAndroid.requestMultiple([
+				const perms: any[] = [
 					PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
 					PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
-				]);
+				];
+				// Android 12+: без BLUETOOTH_CONNECT звук не пойдёт в BT-гарнитуру шлема
+				if (Number(Platform.Version) >= 31) {
+					perms.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+				}
+				const granted = await PermissionsAndroid.requestMultiple(perms);
 				if (granted['android.permission.RECORD_AUDIO'] !== PermissionsAndroid.RESULTS.GRANTED) {
 					Alert.alert('Ошибка', 'Требуется доступ к микрофону');
 				}

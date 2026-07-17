@@ -167,6 +167,62 @@ export const sendChatMessage = (chatId: number, text: string) =>
 export const markChatRead = (chatId: number, lastId: number) =>
   request(`/chats/${chatId}/read`, { method: 'POST', body: { lastId } }).catch(() => {});
 
+// ---------- Карта и заезды ----------
+
+export type FriendLocation = {
+  lat: number;
+  lng: number;
+  speed: number;
+  heading: number;
+  updatedAt: number;
+  user: SocialUser;
+};
+
+export type LeaderboardEntry = {
+  place: number;
+  user: SocialUser;
+  distance: number; // метры
+  maxSpeed: number; // км/ч
+  avgSpeed: number; // км/ч
+  duration: number; // секунды
+  updatedAt: number;
+  location: { lat: number; lng: number; speed: number; updatedAt: number } | null;
+};
+
+export type RideInfo = {
+  id: number;
+  name: string;
+  status: 'active' | 'finished';
+  createdAt: number;
+  finishedAt: number | null;
+  creator: SocialUser;
+  leaderboard: LeaderboardEntry[];
+  amMember?: boolean;
+};
+
+export const getFriendLocations = () =>
+  request<{ locations: FriendLocation[] }>('/locations').then((d) => d.locations);
+
+export const createRide = (name: string) =>
+  request<{ ride: RideInfo }>('/rides', { method: 'POST', body: { name } }).then((d) => d.ride);
+
+export const getActiveRides = () =>
+  request<{ rides: RideInfo[] }>('/rides/active').then((d) => d.rides);
+
+export const getRide = (rideId: number) =>
+  request<{ ride: RideInfo }>(`/rides/${rideId}`).then((d) => d.ride);
+
+export const joinRide = (rideId: number) =>
+  request<{ ride: RideInfo }>(`/rides/${rideId}/join`, { method: 'POST' }).then((d) => d.ride);
+
+export const sendRideStats = (
+  rideId: number,
+  stats: { distance: number; maxSpeed: number; avgSpeed: number; duration: number }
+) => request(`/rides/${rideId}/stats`, { method: 'POST', body: stats }).catch(() => {});
+
+export const finishRide = (rideId: number) =>
+  request<{ ride: RideInfo }>(`/rides/${rideId}/finish`, { method: 'POST' }).then((d) => d.ride);
+
 // Обновить имя/аватар аккаунта (вызывается при сохранении вкладки PROFILE)
 export const updateMe = async (displayName: string, avatar: string) => {
   const token = await getToken();

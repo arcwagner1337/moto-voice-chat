@@ -52,8 +52,30 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS rides (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT    NOT NULL,
+  created_by  INTEGER NOT NULL REFERENCES users(id),
+  status      TEXT    NOT NULL CHECK (status IN ('active', 'finished')),
+  created_at  INTEGER NOT NULL,
+  finished_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS ride_members (
+  ride_id    INTEGER NOT NULL REFERENCES rides(id),
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  joined_at  INTEGER NOT NULL,
+  distance   REAL    NOT NULL DEFAULT 0,
+  max_speed  REAL    NOT NULL DEFAULT 0,
+  avg_speed  REAL    NOT NULL DEFAULT 0,
+  duration   INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (ride_id, user_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_friendships_to ON friendships(to_id, status);
+CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status);
 `);
 
 // Миграция для баз, созданных до появления счётчика непрочитанных
@@ -101,4 +123,15 @@ export function isChatMember(chatId: number, userId: number): boolean {
     .prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?')
     .get(chatId, userId);
   return !!row;
+}
+
+// id всех принятых друзей пользователя
+export function friendIdsOf(userId: number): number[] {
+  const rows: any[] = db
+    .prepare(
+      `SELECT CASE WHEN from_id = ? THEN to_id ELSE from_id END AS fid
+       FROM friendships WHERE status = 'accepted' AND (from_id = ? OR to_id = ?)`
+    )
+    .all(userId, userId, userId);
+  return rows.map((r) => r.fid as number);
 }

@@ -55,6 +55,9 @@ export default function MeshChatRoom() {
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [currentMsg, setCurrentMsg] = useState('');
   const [isMuted, setIsMuted] = useState(false);
+  const [isDeafened, setIsDeafened] = useState(false);
+  const deafenRef = useRef(false);
+  const muteBeforeDeafen = useRef(false);
   const [remoteMutes, setRemoteMutes] = useState<{ [key: string]: boolean }>({});
 
   const peers = useRef<{ [key: string]: RTCPeerConnection }>({});
@@ -403,6 +406,24 @@ export default function MeshChatRoom() {
   // Двойное нажатие "громкость −" — мут, "громкость +" — размут
   useVolumeDoubleTapMute(inRoom, applyMute);
 
+  // Deafen как в Discord: глушим входящий звук, свой микрофон тоже мутится;
+  // при выключении мут возвращается в состояние до deafen.
+  const applyDeafen = useCallback((next: boolean) => {
+    deafenRef.current = next;
+    setIsDeafened(next);
+    Object.values(remoteStreams.current).forEach((stream: any) => {
+      stream?.getAudioTracks?.().forEach((t: any) => { t.enabled = !next; });
+    });
+    if (next) {
+      muteBeforeDeafen.current = isMutedRef.current;
+      applyMute(true);
+    } else if (!muteBeforeDeafen.current) {
+      applyMute(false);
+    }
+  }, [applyMute]);
+
+  const toggleDeafen = () => applyDeafen(!deafenRef.current);
+
   const getOrCreatePeer = (remoteIp: string) => {
     if (peers.current[remoteIp]) return peers.current[remoteIp];
     const pc = new RTCPeerConnection({ iceServers: [] });
@@ -412,6 +433,10 @@ export default function MeshChatRoom() {
     (pc as any).ontrack = (e: any) => {
       if (e.streams && e.streams[0]) {
         remoteStreams.current[remoteIp] = e.streams[0];
+        // В режиме deafen новые участники тоже приходят заглушенными
+        if (deafenRef.current) {
+          e.streams[0].getAudioTracks?.().forEach((t: any) => { t.enabled = false; });
+        }
         forceUpdate();
       }
     };
@@ -494,6 +519,7 @@ export default function MeshChatRoom() {
       Object.values(peers.current).forEach(p => p.close());
       peers.current = {}; remoteStreams.current = {}; peerNames.current = {};
       setRemoteMutes({}); setChatMessages([]);
+      deafenRef.current = false; setIsDeafened(false);
       setIsHost(false); setInRoom(false); setIsMuted(false);
       InCallManager.stop(); zeroconf.stop();
       if (server.current) server.current.close();
@@ -719,14 +745,22 @@ export default function MeshChatRoom() {
                   </TouchableOpacity>
                 </View>
 
-                <TouchableOpacity
-                  onPress={toggleMute}
-                  className={`p-4 rounded-2xl w-full border ${isMuted ? 'bg-red-500/10 border-red-500/50' : 'bg-slate-800 border-slate-700'}`}
-                >
-                  <Text className={`text-center font-bold uppercase ${isMuted ? 'text-red-500' : 'text-white'}`}>
-                    {isMuted ? 'Микрофон выключен' : 'Микрофон включен'}
-                  </Text>
-                </TouchableOpacity>
+                <View className="flex-row gap-2">
+                  <TouchableOpacity
+                    onPress={toggleMute}
+                    className={`flex-1 p-4 rounded-2xl border ${isMuted ? 'bg-red-500/10 border-red-500/50' : 'bg-slate-800 border-slate-700'}`}
+                  >
+                    <Text className={`text-center font-bold uppercase ${isMuted ? 'text-red-500' : 'text-white'}`}>
+                      {isMuted ? '🔇 Мут' : '🎤 Микрофон'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={toggleDeafen}
+                    className={`w-16 p-4 rounded-2xl border items-center justify-center ${isDeafened ? 'bg-red-500/10 border-red-500/50' : 'bg-slate-800 border-slate-700'}`}
+                  >
+                    <Text className="text-xl">{isDeafened ? '🔕' : '🎧'}</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
           </View>

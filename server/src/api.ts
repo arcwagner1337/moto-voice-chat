@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import type { Response } from 'express';
-import { db, publicUser, getUserById, areFriends, isChatMember, PublicUser } from './db';
+import { db, publicUser, getUserById, areFriends, isChatMember, friendIdsOf, PublicUser } from './db';
 import { hashPassword, checkPassword, signToken, requireAuth, AuthedRequest } from './auth';
-import { isOnline, notifyUser } from './realtime';
+import { isOnline, notifyUser, getLiveLocation } from './realtime';
 
 export const api = Router();
 
@@ -311,6 +311,175 @@ api.post('/chats/:id/read', requireAuth, (req, res) => {
     'UPDATE chat_members SET last_read_id = MAX(last_read_id, ?) WHERE chat_id = ? AND user_id = ?'
   ).run(lastId, chatId, userId);
   res.json({ ok: true });
+});
+
+// ---------- Позиции друзей ----------
+
+api.get('/locations', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const result: any[] = [];
+  for (const fid of friendIdsOf(userId)) {
+    const loc = getLiveLocation(fid);
+    if (loc) {
+      const user = getUserById(fid);
+      if (user) result.push({ ...loc, user: { ...user, online: isOnline(fid) } });
+    }
+  }
+  res.json({ locations: result });
+});
+
+// ---------- Заезды ----------
+
+function canSeeRide(rideId: number, userId: number): boolean {
+  const isMember = db
+    .prepare('SELECT 1 FROM ride_members WHERE ride_id = ? AND user_id = ?')
+    .get(rideId, userId);
+  if (isMember) return true;
+  // Виден, если среди участников есть друг
+  const friends = friendIdsOf(userId);
+  if (friends.length === 0) return false;
+  const placeholders = friends.map(() => '?').join(',');
+  const row = db
+    .prepare(`SELECT 1 FROM ride_members WHERE ride_id = ? AND user_id IN (${placeholders}) LIMIT 1`)
+    .get(rideId, ...friends);
+  return !!row;
+}
+
+function rideInfo(rideId: number) {
+  const ride: any = db.prepare('SELECT * FROM rides WHERE id = ?').get(rideId);
+  if (!ride) return null;
+  const members: any[] = db
+    .prepare(
+      `SELECT m.*, u.username, u.display_name, u.avatar FROM ride_members m
+       JOIN users u ON u.id = m.user_id
+       WHERE m.ride_id = ?
+       ORDER BY m.distance DESC, m.max_speed DESC`
+    )
+    .all(rideId);
+  const creator = getUserById(ride.created_by);
+  return {
+    id: ride.id,
+    name: ride.name,
+    status: ride.status,
+    createdAt: ride.created_at,
+    finishedAt: ride.finished_at,
+    creator,
+    leaderboard: members.map((m, idx) => ({
+      place: idx + 1,
+      user: {
+        id: m.user_id,
+        username: m.username,
+        displayName: m.display_name,
+        avatar: m.avatar,
+        online: isOnline(m.user_id),
+      },
+      distance: m.distance,
+      maxSpeed: m.max_speed,
+      avgSpeed: m.avg_speed,
+      duration: m.duration,
+      updatedAt: m.updated_at,
+      location: getLiveLocation(m.user_id) || null,
+    })),
+  };
+}
+
+api.post('/rides', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Введите название заезда' });
+  const result = db
+    .prepare("INSERT INTO rides (name, created_by, status, created_at) VALUES (?, ?, 'active', ?)")
+    .run(name.slice(0, 40), userId, now());
+  const rideId = Number(result.lastInsertRowid);
+  db.prepare('INSERT INTO ride_members (ride_id, user_id, joined_at) VALUES (?, ?, ?)')
+    .run(rideId, userId, now());
+  for (const fid of friendIdsOf(userId)) notifyUser(fid, 'rides:update', {});
+  res.json({ ride: rideInfo(rideId) });
+});
+
+api.get('/rides/active', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const visible = [userId, ...friendIdsOf(userId)];
+  const placeholders = visible.map(() => '?').join(',');
+  const rows: any[] = db
+    .prepare(
+      `SELECT DISTINCT r.id FROM rides r
+       JOIN ride_members m ON m.ride_id = r.id
+       WHERE r.status = 'active' AND m.user_id IN (${placeholders})
+       ORDER BY r.id DESC LIMIT 20`
+    )
+    .all(...visible);
+  res.json({
+    rides: rows.map((r) => {
+      const info: any = rideInfo(r.id);
+      return {
+        ...info,
+        amMember: info.leaderboard.some((e: any) => e.user.id === userId),
+      };
+    }),
+  });
+});
+
+api.get('/rides/:id', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const rideId = Number(req.params.id);
+  if (!canSeeRide(rideId, userId)) return res.status(403).json({ error: 'Нет доступа' });
+  const info = rideInfo(rideId);
+  if (!info) return res.status(404).json({ error: 'Заезд не найден' });
+  res.json({ ride: info });
+});
+
+api.post('/rides/:id/join', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const rideId = Number(req.params.id);
+  const ride: any = db.prepare('SELECT * FROM rides WHERE id = ?').get(rideId);
+  if (!ride || ride.status !== 'active') return res.status(404).json({ error: 'Заезд не активен' });
+  if (!canSeeRide(rideId, userId)) return res.status(403).json({ error: 'Нет доступа' });
+  const exists = db
+    .prepare('SELECT 1 FROM ride_members WHERE ride_id = ? AND user_id = ?')
+    .get(rideId, userId);
+  if (!exists) {
+    db.prepare('INSERT INTO ride_members (ride_id, user_id, joined_at) VALUES (?, ?, ?)')
+      .run(rideId, userId, now());
+  }
+  res.json({ ride: rideInfo(rideId) });
+});
+
+api.post('/rides/:id/stats', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const rideId = Number(req.params.id);
+  const ride: any = db.prepare('SELECT * FROM rides WHERE id = ?').get(rideId);
+  if (!ride || ride.status !== 'active') return res.status(404).json({ error: 'Заезд не активен' });
+  const member = db
+    .prepare('SELECT 1 FROM ride_members WHERE ride_id = ? AND user_id = ?')
+    .get(rideId, userId);
+  if (!member) return res.status(403).json({ error: 'Вы не участник заезда' });
+
+  const distance = Math.max(0, Number(req.body?.distance) || 0);
+  const maxSpeed = Math.max(0, Number(req.body?.maxSpeed) || 0);
+  const avgSpeed = Math.max(0, Number(req.body?.avgSpeed) || 0);
+  const duration = Math.max(0, Number(req.body?.duration) || 0);
+  db.prepare(
+    `UPDATE ride_members
+     SET distance = MAX(distance, ?), max_speed = MAX(max_speed, ?),
+         avg_speed = ?, duration = ?, updated_at = ?
+     WHERE ride_id = ? AND user_id = ?`
+  ).run(distance, maxSpeed, avgSpeed, duration, now(), rideId, userId);
+  res.json({ ok: true });
+});
+
+api.post('/rides/:id/finish', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const rideId = Number(req.params.id);
+  const ride: any = db.prepare('SELECT * FROM rides WHERE id = ?').get(rideId);
+  if (!ride) return res.status(404).json({ error: 'Заезд не найден' });
+  if (ride.created_by !== userId) {
+    return res.status(403).json({ error: 'Завершить заезд может только создатель' });
+  }
+  db.prepare("UPDATE rides SET status = 'finished', finished_at = ? WHERE id = ?").run(now(), rideId);
+  const members: any[] = db.prepare('SELECT user_id FROM ride_members WHERE ride_id = ?').all(rideId);
+  for (const m of members) notifyUser(m.user_id, 'rides:update', {});
+  res.json({ ride: rideInfo(rideId) });
 });
 
 // ---------- Сообщения ----------

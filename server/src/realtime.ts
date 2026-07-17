@@ -1,10 +1,28 @@
 import type { Server } from 'socket.io';
 import { verifyToken } from './auth';
+import { friendIdsOf } from './db';
 
 let io: Server | null = null;
 
 // userId -> количество активных сокетов (несколько устройств/переподключения)
 const online = new Map<number, number>();
+
+// Живые позиции (в памяти — история не хранится)
+export type LiveLocation = {
+  lat: number;
+  lng: number;
+  speed: number; // км/ч
+  heading: number;
+  updatedAt: number;
+};
+const locations = new Map<number, LiveLocation>();
+
+export function getLiveLocation(userId: number): LiveLocation | undefined {
+  const loc = locations.get(userId);
+  // Позиция старше 5 минут считается неактуальной
+  if (loc && Date.now() - loc.updatedAt > 5 * 60 * 1000) return undefined;
+  return loc;
+}
 
 export function isOnline(userId: number): boolean {
   return (online.get(userId) || 0) > 0;
@@ -57,6 +75,38 @@ export function setupRealtime(server: Server) {
 
     socket.on('signal', (to: string, data: any) => {
       server.to(to).emit('signal', socket.id, data);
+    });
+
+    // ---------- Живые позиции (карта друзей / заезды) ----------
+
+    socket.on('loc:update', (data: any) => {
+      const uid = socket.data.userId as number | undefined;
+      if (!uid) return;
+      const loc: LiveLocation = {
+        lat: Number(data?.lat),
+        lng: Number(data?.lng),
+        speed: Math.max(0, Number(data?.speed) || 0),
+        heading: Number(data?.heading) || 0,
+        updatedAt: Date.now(),
+      };
+      if (!isFinite(loc.lat) || !isFinite(loc.lng)) return;
+      locations.set(uid, loc);
+      for (const fid of friendIdsOf(uid)) {
+        if (isOnline(fid)) {
+          server.to(`user:${fid}`).emit('loc:friend', { userId: uid, ...loc });
+        }
+      }
+    });
+
+    socket.on('loc:stop', () => {
+      const uid = socket.data.userId as number | undefined;
+      if (!uid) return;
+      locations.delete(uid);
+      for (const fid of friendIdsOf(uid)) {
+        if (isOnline(fid)) {
+          server.to(`user:${fid}`).emit('loc:friend-stop', { userId: uid });
+        }
+      }
     });
 
     // ---------- Отключение ----------

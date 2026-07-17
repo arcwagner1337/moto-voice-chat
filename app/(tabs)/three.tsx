@@ -56,6 +56,9 @@ export default function InternetChatRoom() {
 	const [currentMsg, setCurrentMsg] = useState('');
 
 	const [isMuted, setIsMuted] = useState(false);
+	const [isDeafened, setIsDeafened] = useState(false);
+	const deafenRef = useRef(false);
+	const muteBeforeDeafen = useRef(false);
 	const [isSpeaker, setIsSpeaker] = useState(true);
 	const [availableMics, setAvailableMics] = useState<any[]>([]);
 	const [currentMicIdx, setCurrentMicIdx] = useState(0);
@@ -463,7 +466,17 @@ export default function InternetChatRoom() {
 		const pcAny = pc as any;
 		const dc = pc.createDataChannel("keepalive");
 		pcAny.onicecandidate = (e: any) => { if (e.candidate) socket.current.emit("signal", remoteId, { type: "ice", candidate: e.candidate }); };
-		pcAny.ontrack = (e: any) => { if (e.streams) { remoteStreams.current[remoteId] = e.streams; updateUI(); } };
+		pcAny.ontrack = (e: any) => {
+			if (e.streams) {
+				remoteStreams.current[remoteId] = e.streams;
+				// Если сидим в deafen — новые участники тоже должны быть заглушены
+				if (deafenRef.current) {
+					const stream = Array.isArray(e.streams) ? e.streams[0] : e.streams;
+					stream?.getAudioTracks?.().forEach((t: any) => { t.enabled = false; });
+				}
+				updateUI();
+			}
+		};
 		if (localStream.current) localStream.current.getTracks().forEach((t: any) => pc.addTrack(t, localStream.current));
 		peers.current[remoteId] = pc;
 		peerKeepAlives.current[remoteId] = setInterval(() => {
@@ -501,6 +514,32 @@ export default function InternetChatRoom() {
 	// Двойное нажатие "громкость −" — мут, "громкость +" — размут
 	useVolumeDoubleTapMute(inRoom, applyMute);
 
+	// Deafen как в Discord: глушим входящий звук всех участников.
+	// При включении также мутим свой микрофон, при выключении возвращаем
+	// мут в состояние, которое было до deafen.
+	const setRemoteAudioEnabled = (enabled: boolean) => {
+		Object.values(remoteStreams.current).forEach((s: any) => {
+			const stream = Array.isArray(s) ? s[0] : s;
+			stream?.getAudioTracks?.().forEach((t: any) => {
+				t.enabled = enabled;
+			});
+		});
+	};
+
+	const applyDeafen = useCallback((next: boolean) => {
+		deafenRef.current = next;
+		setIsDeafened(next);
+		setRemoteAudioEnabled(!next);
+		if (next) {
+			muteBeforeDeafen.current = isMutedRef.current;
+			applyMute(true);
+		} else if (!muteBeforeDeafen.current) {
+			applyMute(false);
+		}
+	}, [applyMute]);
+
+	const toggleDeafen = () => applyDeafen(!deafenRef.current);
+
 	const toggleSpeaker = () => {
 		const newState = !isSpeaker;
 		InCallManager.setForceSpeakerphoneOn(newState);
@@ -535,6 +574,8 @@ export default function InternetChatRoom() {
 		peerKeepAlives.current = {};
 		peers.current = {};
 		remoteStreams.current = {};
+		deafenRef.current = false;
+		setIsDeafened(false);
 		setInRoom(false);
 		InCallManager.stop();
 		if (localStream.current) {
@@ -680,6 +721,9 @@ export default function InternetChatRoom() {
 										<Text className={`font-black text-[10px] uppercase ${isMuted ? 'text-red-500' : 'text-white'}`}>{isMuted ? 'Muted' : 'Active'}</Text>
 									</TouchableOpacity>
 									<TouchableOpacity onPress={switchMicrophone} className="w-14 h-14 bg-slate-800 border-2 border-slate-700 rounded-2xl items-center justify-center"><Text className="text-xl">🔄</Text></TouchableOpacity>
+									<TouchableOpacity onPress={toggleDeafen} className={`w-14 h-14 rounded-2xl items-center justify-center border-2 ${isDeafened ? 'bg-red-500/20 border-red-500' : 'bg-slate-800 border-slate-700'}`}>
+										<Text className="text-xl">{isDeafened ? '🔕' : '🎧'}</Text>
+									</TouchableOpacity>
 									<TouchableOpacity onPress={toggleSpeaker} className={`w-14 h-14 rounded-2xl items-center justify-center border-2 ${isSpeaker ? 'bg-cyan-500/20 border-cyan-400' : 'bg-slate-800 border-slate-700'}`}>
 										<Text className="text-xl">{isSpeaker ? '🔊' : '🔈'}</Text>
 									</TouchableOpacity>

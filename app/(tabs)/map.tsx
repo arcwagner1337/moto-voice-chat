@@ -191,11 +191,14 @@ export default function MapScreen() {
   // ---------- Загрузка ----------
 
   const refreshRides = useCallback(async () => {
-    try {
-      const [act, hist] = await Promise.all([getActiveRides(), getRideHistory()]);
-      setRides(act);
-      setHistory(hist);
-    } catch {}
+    // Независимо: падение истории (например старый сервер без /rides/history)
+    // не должно ломать обновление списка активных заездов
+    getActiveRides()
+      .then(setRides)
+      .catch(() => {});
+    getRideHistory()
+      .then(setHistory)
+      .catch(() => {});
   }, []);
 
   useFocusEffect(

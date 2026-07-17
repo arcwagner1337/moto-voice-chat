@@ -215,13 +215,22 @@ export default function ChatsScreen() {
                       </Text>
                     )}
                   </View>
-                  <Text className="text-slate-500 text-xs" numberOfLines={1}>
-                    {c.lastMessage
-                      ? `${c.lastMessage.senderName}: ${c.lastMessage.text}`
-                      : c.type === 'group'
-                        ? `Участников: ${c.members.length}`
-                        : 'Нет сообщений'}
-                  </Text>
+                  <View className="flex-row items-center">
+                    <Text className="text-slate-500 text-xs flex-1" numberOfLines={1}>
+                      {c.lastMessage
+                        ? `${c.lastMessage.senderName}: ${c.lastMessage.text}`
+                        : c.type === 'group'
+                          ? `Участников: ${c.members.length}`
+                          : 'Нет сообщений'}
+                    </Text>
+                    {!!c.unread && (
+                      <View className="bg-cyan-500 rounded-full min-w-[20px] h-5 px-1.5 items-center justify-center ml-2">
+                        <Text className="text-slate-950 text-[10px] font-black">
+                          {c.unread > 99 ? '99+' : c.unread}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                 </View>
               </TouchableOpacity>
             ))}

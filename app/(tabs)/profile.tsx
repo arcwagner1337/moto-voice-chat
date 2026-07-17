@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AVATARS, DEFAULT_SERVER_URL, loadProfile, saveProfile } from '../../lib/profile';
+import { updateMe } from '../../lib/api';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
@@ -38,6 +39,10 @@ export default function ProfileScreen() {
     await saveProfile({ name: name.trim(), avatar, serverUrl: url });
     setName(name.trim());
     setServerUrl(url);
+    // Если вошли в аккаунт — обновляем имя/аватар и на сервере
+    if (name.trim()) {
+      updateMe(name.trim(), avatar).catch(() => {});
+    }
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 2000);
   };

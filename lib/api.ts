@@ -18,6 +18,7 @@ export type ChatSummary = {
   type: 'dm' | 'group';
   title: string;
   avatar: string;
+  unread?: number;
   members: SocialUser[];
   lastMessage: { text: string; senderName: string; createdAt: number } | null;
 };
@@ -162,3 +163,18 @@ export const sendChatMessage = (chatId: number, text: string) =>
     method: 'POST',
     body: { text },
   }).then((d) => d.message);
+
+export const markChatRead = (chatId: number, lastId: number) =>
+  request(`/chats/${chatId}/read`, { method: 'POST', body: { lastId } }).catch(() => {});
+
+// Обновить имя/аватар аккаунта (вызывается при сохранении вкладки PROFILE)
+export const updateMe = async (displayName: string, avatar: string) => {
+  const token = await getToken();
+  if (!token) return null;
+  const d = await request<{ user: SocialUser }>('/me', {
+    method: 'PUT',
+    body: { displayName, avatar },
+  });
+  await AsyncStorage.setItem(USER_KEY, JSON.stringify(d.user));
+  return d.user;
+};

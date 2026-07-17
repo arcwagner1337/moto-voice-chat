@@ -207,11 +207,19 @@ function chatInfo(chatId: number, forUserId: number) {
       : chat.name || 'Группа';
   const avatar = chat.type === 'dm' ? others[0]?.avatar || '👤' : '👥';
 
+  const meMember: any = db
+    .prepare('SELECT last_read_id FROM chat_members WHERE chat_id = ? AND user_id = ?')
+    .get(chatId, forUserId);
+  const unreadRow: any = db
+    .prepare('SELECT COUNT(*) AS c FROM messages WHERE chat_id = ? AND id > ? AND sender_id != ?')
+    .get(chatId, meMember?.last_read_id || 0, forUserId);
+
   return {
     id: chat.id,
     type: chat.type,
     title,
     avatar,
+    unread: unreadRow?.c || 0,
     members: members.map((m) => ({ ...publicUser(m), online: isOnline(m.id) })),
     lastMessage: last
       ? { text: last.text, senderName: last.sender_name, createdAt: last.created_at }
@@ -292,6 +300,17 @@ api.post('/chats/group', requireAuth, (req, res) => {
     notifyUser(id, 'chats:update', {});
   }
   res.json({ chat: chatInfo(chatId, userId) });
+});
+
+api.post('/chats/:id/read', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const chatId = Number(req.params.id);
+  if (!isChatMember(chatId, userId)) return res.status(403).json({ error: 'Нет доступа' });
+  const lastId = Number(req.body?.lastId) || 0;
+  db.prepare(
+    'UPDATE chat_members SET last_read_id = MAX(last_read_id, ?) WHERE chat_id = ? AND user_id = ?'
+  ).run(lastId, chatId, userId);
+  res.json({ ok: true });
 });
 
 // ---------- Сообщения ----------

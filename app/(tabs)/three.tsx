@@ -1,4 +1,4 @@
-import { Stack, useFocusEffect } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
 	View,
@@ -95,6 +95,19 @@ export default function InternetChatRoom() {
 			applyProfile();
 		}, [applyProfile])
 	);
+
+	// Звонок из чата: /chat/[id] открывает эту вкладку с параметром room,
+	// и мы сразу входим в голосовую комнату этого чата.
+	const { room: roomParam } = useLocalSearchParams<{ room?: string }>();
+	const autoJoinedRef = useRef('');
+	useEffect(() => {
+		const target = typeof roomParam === 'string' ? roomParam : '';
+		if (target && userName && !inRoomRef.current && autoJoinedRef.current !== target) {
+			autoJoinedRef.current = target;
+			setRoomID(target);
+			joinRoom(target);
+		}
+	}, [roomParam, userName]);
 
 	useEffect(() => {
 		setupAll();

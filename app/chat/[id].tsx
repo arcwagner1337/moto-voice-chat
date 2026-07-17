@@ -17,6 +17,7 @@ import {
   getChat,
   getMessages,
   sendChatMessage,
+  markChatRead,
 } from '../../lib/api';
 import { getSocialSocket } from '../../lib/socialSocket';
 
@@ -35,6 +36,8 @@ export default function ChatScreen() {
     (msg: ChatMessage) => {
       if (msg.chatId !== chatId) return;
       setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      // Мы смотрим на чат — сразу помечаем прочитанным
+      markChatRead(chatId, msg.id);
     },
     [chatId]
   );
@@ -52,6 +55,7 @@ export default function ChatScreen() {
         if (!active) return;
         setChat(info);
         setMessages(msgs);
+        if (msgs.length > 0) markChatRead(chatId, msgs[msgs.length - 1].id);
       } catch (e) {
         Alert.alert('Ошибка', (e as Error).message);
         router.back();
@@ -113,6 +117,14 @@ export default function ChatScreen() {
                   : 'offline'}
             </Text>
           </View>
+          <TouchableOpacity
+            onPress={() =>
+              router.push({ pathname: '/(tabs)/three', params: { room: `chat-${chatId}` } })
+            }
+            className="w-10 h-10 rounded-xl bg-green-500/10 border border-green-500/40 items-center justify-center"
+          >
+            <Text className="text-lg">📞</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Сообщения */}

@@ -21,6 +21,7 @@
       "expo-audio",
       "expo-asset",
       "expo-font",
+      "./withModularHeaders.js",
       [
         "expo-location",
         {

@@ -16,6 +16,7 @@ import {
   createRide,
   joinRide,
   getRide,
+  getRideHistory,
   finishRide,
   deleteRide,
   setRideTrack,
@@ -56,6 +57,8 @@ export default function MapScreen() {
 
   // Заезды
   const [rides, setRides] = useState<RideInfo[]>([]);
+  const [history, setHistory] = useState<RideInfo[]>([]);
+  const [openHistoryId, setOpenHistoryId] = useState<number | null>(null);
   const [activeRide, setActiveRide] = useState<RideInfo | null>(null);
   const [rideName, setRideName] = useState('');
 
@@ -189,7 +192,9 @@ export default function MapScreen() {
 
   const refreshRides = useCallback(async () => {
     try {
-      setRides(await getActiveRides());
+      const [act, hist] = await Promise.all([getActiveRides(), getRideHistory()]);
+      setRides(act);
+      setHistory(hist);
     } catch {}
   }, []);
 
@@ -304,23 +309,26 @@ export default function MapScreen() {
 
   const finish = () => {
     if (!activeRide) return;
-    Alert.alert('Завершить заезд?', 'Итоги зафиксируются для всех участников', [
-      { text: 'Отмена', style: 'cancel' },
-      {
-        text: 'Завершить',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await finishRide(activeRide.id);
-            setActiveRide(null);
-            setEditingTrack(false);
-            refreshRides();
-          } catch (e) {
-            Alert.alert('Ошибка', (e as Error).message);
-          }
+    Alert.alert(
+      'Завершить заезд?',
+      'Итоги зафиксируются и заезд сохранится в истории. Удалить его можно будет отдельно.',
+      [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Завершить',
+          onPress: async () => {
+            try {
+              await finishRide(activeRide.id);
+              setActiveRide(null);
+              setEditingTrack(false);
+              refreshRides();
+            } catch (e) {
+              Alert.alert('Ошибка', (e as Error).message);
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
 
   const removeRide = (ride: RideInfo) => {
@@ -673,6 +681,89 @@ export default function MapScreen() {
                         )}
                       </View>
                     ))}
+                  </View>
+                )}
+
+                {/* История завершённых заездов */}
+                {history.length > 0 && (
+                  <View className="p-4 bg-slate-900 rounded-3xl border border-slate-800 mt-3">
+                    <Text className="text-slate-500 text-[10px] uppercase font-bold mb-2">
+                      🏁 История заездов
+                    </Text>
+                    {history.map((r) => {
+                      const open = openHistoryId === r.id;
+                      const winner = r.leaderboard[0];
+                      return (
+                        <View
+                          key={r.id}
+                          className="bg-slate-950 rounded-2xl border border-slate-800 mb-1.5 overflow-hidden"
+                        >
+                          <View className="flex-row items-center p-3">
+                            <TouchableOpacity
+                              onPress={() => setOpenHistoryId(open ? null : r.id)}
+                              className="flex-1"
+                            >
+                              <Text className="text-white font-bold">
+                                {r.track?.length ? '🏆' : '🏁'} {r.name}
+                              </Text>
+                              <Text className="text-slate-500 font-mono text-[10px]">
+                                {new Date(r.finishedAt || r.createdAt).toLocaleDateString('ru')} ·
+                                участников: {r.leaderboard.length}
+                                {winner ? ` · 🥇 ${winner.user.displayName}` : ''}
+                              </Text>
+                            </TouchableOpacity>
+                            <Text className="text-slate-600 mr-2">{open ? '▲' : '▼'}</Text>
+                            {r.creator?.id === user.id && (
+                              <TouchableOpacity
+                                onPress={() => removeRide(r)}
+                                className="px-3 py-2 rounded-xl bg-slate-900 border border-red-500/30"
+                              >
+                                <Text className="text-[12px]">🗑</Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                          {open && (
+                            <View className="px-3 pb-3">
+                              {r.leaderboard.map((e) => (
+                                <View
+                                  key={e.user.id}
+                                  className="flex-row items-center py-2 border-t border-slate-800"
+                                >
+                                  <Text className="text-slate-500 font-mono font-bold w-7">
+                                    {e.place === 1
+                                      ? '🥇'
+                                      : e.place === 2
+                                        ? '🥈'
+                                        : e.place === 3
+                                          ? '🥉'
+                                          : `${e.place}.`}
+                                  </Text>
+                                  <Text className="text-lg mr-2">{e.user.avatar}</Text>
+                                  <View className="flex-1">
+                                    <Text className="text-white font-bold text-sm" numberOfLines={1}>
+                                      {e.user.displayName}
+                                    </Text>
+                                    <Text className="text-slate-500 font-mono text-[10px]">
+                                      макс {Math.round(e.maxSpeed)} · сред {Math.round(e.avgSpeed)} км/ч ·{' '}
+                                      {fmtDur(e.duration)}
+                                    </Text>
+                                  </View>
+                                  {r.track?.length ? (
+                                    <Text className="text-violet-400 font-mono font-bold text-sm">
+                                      CP {e.checkpoint}/{r.track.length}
+                                    </Text>
+                                  ) : (
+                                    <Text className="text-cyan-400 font-mono font-bold text-sm">
+                                      {fmtDist(e.distance)}
+                                    </Text>
+                                  )}
+                                </View>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
                   </View>
                 )}
               </>

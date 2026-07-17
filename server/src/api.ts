@@ -496,6 +496,30 @@ api.get('/rides/active', requireAuth, (req, res) => {
   });
 });
 
+// История завершённых заездов, видимых пользователю (свои + где есть друзья)
+api.get('/rides/history', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const visible = [userId, ...friendIdsOf(userId)];
+  const placeholders = visible.map(() => '?').join(',');
+  const rows: any[] = db
+    .prepare(
+      `SELECT DISTINCT r.id FROM rides r
+       JOIN ride_members m ON m.ride_id = r.id
+       WHERE r.status = 'finished' AND m.user_id IN (${placeholders})
+       ORDER BY r.finished_at DESC LIMIT 30`
+    )
+    .all(...visible);
+  res.json({
+    rides: rows.map((r) => {
+      const info: any = rideInfo(r.id);
+      return {
+        ...info,
+        amMember: info.leaderboard.some((e: any) => e.user.id === userId),
+      };
+    }),
+  });
+});
+
 api.get('/rides/:id', requireAuth, (req, res) => {
   const userId = (req as AuthedRequest).userId;
   const rideId = Number(req.params.id);

@@ -223,6 +223,9 @@ export const createRide = (name: string) =>
 export const getActiveRides = () =>
   request<{ rides: RideInfo[] }>('/rides/active').then((d) => d.rides);
 
+export const getRideHistory = () =>
+  request<{ rides: RideInfo[] }>('/rides/history').then((d) => d.rides);
+
 export const getRide = (rideId: number) =>
   request<{ ride: RideInfo }>(`/rides/${rideId}`).then((d) => d.ride);
 

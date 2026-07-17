@@ -28,6 +28,49 @@ npm start          # порт 3000
 После запуска в приложении во вкладке **PROFILE** укажите адрес сервера,
 например `http://ВАШ_IP:3000`.
 
+## Развёртывание на Oracle Cloud (Always Free)
+
+Бесплатный VPS 24/7. Порядок:
+
+1. **Регистрация**: https://signup.oraclecloud.com — нужна зарубежная карта
+   (только проверка, списаний нет). Home Region выбирайте ближайший к
+   пользователям (например Germany Central — Frankfurt) — Always Free
+   ресурсы привязаны к нему навсегда.
+2. **Создать VM**: Compute → Instances → Create. Image: Ubuntu 24.04.
+   Shape: `VM.Standard.A1.Flex` (ARM, до 4 CPU / 24 ГБ — бесплатно; если
+   «Out of capacity», пробуйте позже или shape `VM.Standard.E2.1.Micro`).
+   Скачайте приватный SSH-ключ при создании.
+3. **Открыть порты в облаке**: Instance → Subnet → Security List →
+   Add Ingress Rules: TCP 80 и 443 (source 0.0.0.0/0).
+4. **На самой VM** (Ubuntu-образы Oracle режут порты ещё и iptables):
+
+```bash
+sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+sudo netfilter-persistent save
+
+# Node 22 + сервер
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs git
+sudo git clone https://github.com/arcwagner1337/moto-voice-chat.git /opt/moto-voice-chat
+cd /opt/moto-voice-chat/server && sudo npm install && sudo npm run build
+```
+
+5. **HTTPS через Caddy + DuckDNS** (обязательно: release-сборки Android и
+   iOS блокируют обычный http):
+   - https://www.duckdns.org — бесплатный поддомен, укажите IP вашей VM.
+   - На VM: `sudo apt-get install -y caddy`, в `/etc/caddy/Caddyfile`:
+
+```
+ваш-домен.duckdns.org {
+    reverse_proxy localhost:3000
+}
+```
+
+   - `sudo systemctl restart caddy` — сертификат выпустится сам.
+6. Включить systemd-юнит из раздела ниже и прописать
+   `https://ваш-домен.duckdns.org` в `BACKEND_URL` (`lib/config.ts`).
+
 ## Автозапуск через systemd (на своём сервере)
 
 `/etc/systemd/system/meshvoice.service`:

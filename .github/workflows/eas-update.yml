@@ -1,0 +1,55 @@
+name: EAS Update (OTA)
+
+# Публикует JS/TS-правки "на лету" в канал production — установленные приложения
+# подтягивают их при следующем запуске без пересборки APK.
+#
+# Запускается на каждый push в main, КРОМЕ нативных пересборок ([BUILD]/[RELEASE]):
+# там свежий JS и так вшит в новый APK, отдельный OTA не нужен.
+# Пути server/**, .github/**, *.md не влияют на JS-бандл — их игнорируем.
+#
+# Требует секрет репозитория EXPO_TOKEN (уже есть, его же использует build.yml).
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'server/**'
+      - '.github/**'
+      - '**/*.md'
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!contains(github.event.head_commit.message, '[BUILD]') &&
+       !contains(github.event.head_commit.message, '[RELEASE]'))
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Publish OTA update
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+        run: eas update --branch production --message "${MSG:-manual OTA update}" --non-interactive

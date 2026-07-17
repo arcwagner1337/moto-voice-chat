@@ -51,6 +51,7 @@ export default function SocialScreen() {
   const [searchQ, setSearchQ] = useState('');
   const [searchResults, setSearchResults] = useState<SocialUser[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -129,10 +130,19 @@ export default function SocialScreen() {
   };
 
   const doSearch = async () => {
-    if (searchQ.trim().length < 2) return;
+    if (searchQ.trim().length < 2) {
+      Alert.alert('Поиск', 'Введите минимум 2 символа логина или имени');
+      return;
+    }
     setSearching(true);
+    setSearched(false);
     try {
-      setSearchResults(await searchUsers(searchQ.trim()));
+      const results = await searchUsers(searchQ.trim());
+      setSearchResults(results);
+      setSearched(true);
+      if (results.length === 0) {
+        Alert.alert('Пользователь не найден', `По запросу «${searchQ.trim()}» никого нет`);
+      }
     } catch (e) {
       Alert.alert('Ошибка', (e as Error).message);
     } finally {
@@ -142,13 +152,26 @@ export default function SocialScreen() {
 
   const addFriend = async (target: SocialUser) => {
     try {
-      await sendFriendRequest(target.id);
+      const res: any = await sendFriendRequest(target.id);
+      const accepted = !!res?.accepted;
       setSearchResults((prev) =>
-        prev.map((u) => (u.id === target.id ? { ...u, relation: 'pending_out' } : u))
+        prev.map((u) =>
+          u.id === target.id ? { ...u, relation: accepted ? 'friends' : 'pending_out' } : u
+        )
       );
       refresh();
+      if (accepted) {
+        Alert.alert('Теперь вы друзья', `${target.avatar} ${target.displayName} (@${target.username})`);
+      } else {
+        Alert.alert(
+          'Заявка отправлена',
+          `${target.avatar} ${target.displayName} (@${target.username}) получит запрос в друзья`
+        );
+      }
     } catch (e) {
-      Alert.alert('Ошибка', (e as Error).message);
+      const msg = (e as Error).message;
+      // Сервер отвечает «Некорректный пользователь», если аккаунт удалён/не найден
+      Alert.alert('Не удалось', msg.includes('Некорректный') ? 'Пользователь не найден' : msg);
     }
   };
 
@@ -311,7 +334,10 @@ export default function SocialScreen() {
                     autoCapitalize="none"
                     className="flex-1 text-white bg-slate-950 p-3 rounded-xl border border-slate-800 mr-2"
                     value={searchQ}
-                    onChangeText={setSearchQ}
+                    onChangeText={(t) => {
+                      setSearchQ(t);
+                      if (searched) setSearched(false);
+                    }}
                     onSubmitEditing={doSearch}
                     returnKeyType="search"
                   />
@@ -322,6 +348,11 @@ export default function SocialScreen() {
                     <Text className="text-white font-bold">{searching ? '...' : '🔍'}</Text>
                   </TouchableOpacity>
                 </View>
+                {searched && searchResults.length === 0 && (
+                  <Text className="text-slate-600 text-xs mt-3">
+                    По запросу «{searchQ.trim()}» никого не найдено
+                  </Text>
+                )}
                 {searchResults.map((u) => (
                   <View key={u.id} className="flex-row items-center mt-3">
                     <Text className="text-2xl mr-3">{u.avatar}</Text>

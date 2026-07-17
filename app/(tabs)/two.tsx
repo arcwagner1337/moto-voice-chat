@@ -267,8 +267,8 @@ export default function MeshChatRoom() {
       }
       await PermissionsAndroid.requestMultiple(perms);
     }
-    const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
-    localStream.current = stream;
+    // Микрофон при старте вкладки НЕ захватываем — только при входе в комнату
+    // (ensureLocalStream), иначе индикатор записи горит постоянно.
 
     // Прямое определение локального IP вместо самопубликации mDNS: многие
     // устройства не получают обратно свои же multicast-анонсы, из-за чего
@@ -310,10 +310,23 @@ export default function MeshChatRoom() {
   //   zeroconf.scan('voicechat', 'tcp', 'local.');
   // };
 
+  // Захват микрофона по требованию: вызывается при создании/входе в комнату
+  const ensureLocalStream = async () => {
+    if (localStream.current) return;
+    const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
+    localStream.current = stream;
+  };
+
   const createRoom = async () => {
     if (!myIp) return Alert.alert("Ошибка", "Дождитесь определения IP");
     const port = parseInt(roomPort);
     activePort.current = port;
+
+    try {
+      await ensureLocalStream();
+    } catch (e) {
+      return Alert.alert("Ошибка", "Не удалось получить доступ к микрофону");
+    }
 
     await startAudioForegroundService();
 
@@ -352,6 +365,12 @@ export default function MeshChatRoom() {
   const joinRoom = async (room: any) => {
     if (parseInt(inputPass) !== room.port) return Alert.alert("Ошибка", "Неверный пароль");
     activePort.current = room.port;
+
+    try {
+      await ensureLocalStream();
+    } catch (e) {
+      return Alert.alert("Ошибка", "Не удалось получить доступ к микрофону");
+    }
 
     await startAudioForegroundService();
 
@@ -521,12 +540,18 @@ export default function MeshChatRoom() {
     stopAudioForegroundService();
 
     setTimeout(() => {
-      Object.values(peers.current).forEach(p => p.close());
+      Object.values(peers.current).forEach(p => { try { p.close(); } catch { } });
       peers.current = {}; remoteStreams.current = {}; peerNames.current = {};
       setRemoteMutes({}); setChatMessages([]);
       deafenRef.current = false; setIsDeafened(false);
       setIsHost(false); setInRoom(false); setIsMuted(false);
-      InCallManager.stop(); zeroconf.stop();
+      // Освобождаем микрофон — без этого индикатор записи горит после выхода
+      if (localStream.current) {
+        try { localStream.current.getTracks().forEach((t: any) => t.stop()); } catch { }
+        localStream.current = null;
+      }
+      try { InCallManager.stop(); } catch { }
+      zeroconf.stop();
       if (server.current) server.current.close();
       setupDiscovery();
     }, 400);
@@ -629,16 +654,6 @@ export default function MeshChatRoom() {
                       🔒 Имя задано во вкладке PROFILE
                     </Text>
                   )}
-                  <View className="flex-row mt-2">
-                    <Text className="text-slate-500 text-xs">IP: </Text>
-                    <TextInput
-                      value={myIp}
-                      onChangeText={setMyIp}
-                      className="text-slate-400 text-xs flex-1"
-                      placeholder="192.168.1.X"
-                      placeholderTextColor="#333"
-                    />
-                  </View>
                 </View>
 
                 <View className="bg-slate-900 p-4 rounded-3xl mt-4 border border-slate-800">

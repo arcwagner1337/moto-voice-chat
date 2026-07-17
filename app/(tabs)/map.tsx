@@ -43,6 +43,7 @@ export default function MapScreen() {
   const webRef = useRef<WebView>(null);
 
   const [user, setUser] = useState<SocialUser | null>(null);
+  const [fullMap, setFullMap] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [bgTracking, setBgTracking] = useState(false);
   const [myPos, setMyPos] = useState<GeoPoint | null>(null);
@@ -334,9 +335,11 @@ export default function MapScreen() {
     <View className="flex-1 bg-slate-950">
       <Stack.Screen options={{ headerShown: false }} />
 
-      <View style={{ paddingTop: insets.top + 16 }} className="px-5 pb-3">
-        <ScreenHeader title="MAP" subtitle="friends_tracking · rides" noMargin />
-      </View>
+      {!fullMap && (
+        <View style={{ paddingTop: insets.top + 16 }} className="px-5 pb-3">
+          <ScreenHeader title="MAP" subtitle="friends_tracking · rides" noMargin />
+        </View>
+      )}
 
       {!user ? (
         <View className="mx-5 p-6 bg-slate-900 rounded-3xl border border-slate-800">
@@ -347,10 +350,10 @@ export default function MapScreen() {
         </View>
       ) : (
         <>
-          {/* Карта */}
+          {/* Карта (⛶ — на весь экран; WebView не перемонтируется при переключении) */}
           <View
-            className="mx-5 rounded-3xl overflow-hidden border border-slate-800"
-            style={{ height: '34%' }}
+            className={fullMap ? 'flex-1 overflow-hidden' : 'mx-5 rounded-3xl overflow-hidden border border-slate-800'}
+            style={fullMap ? undefined : { height: '34%' }}
           >
             <WebView
               ref={webRef}
@@ -371,8 +374,21 @@ export default function MapScreen() {
             >
               <Text className="text-base">🎯</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setFullMap((v) => !v)}
+              style={fullMap ? { top: insets.top + 12 } : undefined}
+              className={`absolute right-3 w-10 h-10 bg-slate-900/90 border border-cyan-500/50 rounded-xl items-center justify-center ${
+                fullMap ? '' : 'top-3'
+              }`}
+            >
+              <Text className="text-base">{fullMap ? '✕' : '⛶'}</Text>
+            </TouchableOpacity>
             {editingTrack && (
-              <View className="absolute top-3 left-3 right-3 bg-slate-900/95 border border-cyan-500/50 rounded-xl p-2">
+              <View
+                style={fullMap ? { top: insets.top + 12 } : undefined}
+                className={`absolute left-3 bg-slate-900/95 border border-cyan-500/50 rounded-xl p-2 ${
+                  fullMap ? 'right-16' : 'top-3 right-16'
+                }`}>
                 <Text className="text-cyan-400 text-[10px] font-bold text-center">
                   Тапайте по карте — точки станут чекпоинтами ({draftTrack.length}/50)
                 </Text>
@@ -381,6 +397,7 @@ export default function MapScreen() {
           </View>
 
           {/* Тумблеры трансляции */}
+          {!fullMap && (
           <View className="mx-5 mt-3 flex-row gap-2">
             <TouchableOpacity
               onPress={() => setSharing((v) => !v)}
@@ -403,7 +420,9 @@ export default function MapScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+          )}
 
+          {!fullMap && (
           <ScrollView
             className="flex-1 mt-3"
             contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
@@ -596,6 +615,7 @@ export default function MapScreen() {
               </>
             )}
           </ScrollView>
+          )}
         </>
       )}
     </View>

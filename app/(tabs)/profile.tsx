@@ -12,14 +12,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../../components/ScreenHeader';
-import { AVATARS, DEFAULT_SERVER_URL, loadProfile, saveProfile } from '../../lib/profile';
+import { AVATARS, loadProfile, saveProfile } from '../../lib/profile';
 import { updateMe } from '../../lib/api';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState(AVATARS[0]);
-  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [savedFlash, setSavedFlash] = useState(false);
 
   useFocusEffect(
@@ -27,18 +26,13 @@ export default function ProfileScreen() {
       loadProfile().then((p) => {
         setName(p.name);
         setAvatar(p.avatar);
-        setServerUrl(p.serverUrl);
       });
     }, [])
   );
 
   const save = async () => {
-    let url = serverUrl.trim();
-    if (url && !/^https?:\/\//i.test(url)) url = `http://${url}`;
-    if (!url) url = DEFAULT_SERVER_URL;
-    await saveProfile({ name: name.trim(), avatar, serverUrl: url });
+    await saveProfile({ name: name.trim(), avatar });
     setName(name.trim());
-    setServerUrl(url);
     // Если вошли в аккаунт — обновляем имя/аватар и на сервере
     if (name.trim()) {
       updateMe(name.trim(), avatar).catch(() => {});
@@ -49,7 +43,7 @@ export default function ProfileScreen() {
 
   const clearName = async () => {
     setName('');
-    await saveProfile({ name: '', avatar, serverUrl });
+    await saveProfile({ name: '', avatar });
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 2000);
   };
@@ -110,33 +104,12 @@ export default function ProfileScreen() {
               </View>
             </View>
 
-            {/* Сервер */}
-            <View className="p-4 bg-slate-900 rounded-3xl border border-slate-800 mb-4">
-              <Text className="text-cyan-400 font-bold uppercase mb-2 text-[10px] tracking-widest">
-                Сервер MeshVoice
-              </Text>
-              <TextInput
-                placeholder={DEFAULT_SERVER_URL}
-                placeholderTextColor="#334155"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                className="text-white font-mono text-sm bg-slate-950 p-4 rounded-2xl border border-slate-800"
-                value={serverUrl}
-                onChangeText={setServerUrl}
-              />
-              <Text className="text-slate-500 text-[10px] mt-3 leading-4">
-                Формат: http://IP:ПОРТ (например {DEFAULT_SERVER_URL}). Используется для аккаунта,
-                чатов и звонков INTERNET CALL.
-              </Text>
-            </View>
-
             {/* Превью */}
             <View className="p-4 bg-slate-900/50 rounded-3xl border border-slate-800 mb-4 flex-row items-center">
               <Text className="text-3xl mr-3">{avatar}</Text>
               <View className="flex-1">
                 <Text className="text-white font-bold">{name.trim() || 'Имя не задано'}</Text>
-                <Text className="text-slate-500 font-mono text-[10px]">{serverUrl}</Text>
+                <Text className="text-slate-500 font-mono text-[10px]">rider_id</Text>
               </View>
             </View>
 

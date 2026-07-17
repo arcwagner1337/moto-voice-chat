@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { loadProfile } from './profile';
+import { BACKEND_URL } from './config';
 
 const TOKEN_KEY = '@auth_token';
 const USER_KEY = '@auth_user';
@@ -38,8 +38,7 @@ export type FriendsData = {
 };
 
 export async function getApiBase(): Promise<string> {
-  const profile = await loadProfile();
-  return profile.serverUrl.replace(/\/+$/, '');
+  return BACKEND_URL.replace(/\/+$/, '');
 }
 
 export async function getToken(): Promise<string | null> {

@@ -21,7 +21,8 @@ import { mediaDevices, RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 import io from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, AndroidCategory, AndroidColor, AndroidForegroundServiceType, EventType } from '@notifee/react-native';
-import { loadProfile, DEFAULT_SERVER_URL } from '../../lib/profile';
+import { loadProfile } from '../../lib/profile';
+import { BACKEND_URL } from '../../lib/config';
 import { useVolumeDoubleTapMute } from '../../lib/useVolumeMute';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../../components/ScreenHeader';
@@ -45,8 +46,6 @@ export default function InternetChatRoom() {
 
 	const [userName, setUserName] = useState('');
 	const [nameLocked, setNameLocked] = useState(false);
-	const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
-	const serverUrlRef = useRef(DEFAULT_SERVER_URL);
 	const [roomID, setRoomID] = useState('');
 	const [recentRooms, setRecentRooms] = useState<string[]>([]);
 	const [inRoom, setInRoom] = useState(false);
@@ -78,17 +77,13 @@ export default function InternetChatRoom() {
 	useEffect(() => { inRoomRef.current = inRoom; }, [inRoom]);
 	useEffect(() => { roomIDRef.current = roomID; }, [roomID]);
 	useEffect(() => { userNameRef.current = userName; }, [userName]);
-	useEffect(() => { serverUrlRef.current = serverUrl; }, [serverUrl]);
 
 	const isMutedRef = useRef(false);
 	useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
 
-	// Профиль (вкладка PROFILE): имя подставляется и блокируется,
-	// адрес сигнального сервера подхватывается при каждом фокусе вкладки.
+	// Профиль (вкладка PROFILE): имя подставляется и блокируется.
 	const applyProfile = useCallback(async () => {
 		const profile = await loadProfile();
-		setServerUrl(profile.serverUrl);
-		serverUrlRef.current = profile.serverUrl;
 		if (profile.name) {
 			setUserName(profile.name);
 			setNameLocked(true);
@@ -186,36 +181,12 @@ export default function InternetChatRoom() {
 				console.log('Permission error:', e);
 			}
 		}
+		// Микрофон здесь НЕ захватываем: getUserMedia вызывается только при входе
+		// в комнату (joinRoom), иначе индикатор «микрофон используется» горит всегда.
 		try {
-			const stream = await mediaDevices.getUserMedia({
-				audio: {
-					echoCancellation: true,
-					noiseSuppression: true,
-					autoGainControl: true,
-					googEchoCancellation: true,
-					googAutoGainControl: true,
-					googNoiseSuppression: true,
-					googHighpassFilter: true,
-					sampleRate: 48000,
-					channelCount: 1,
-				} as any,
-				video: false
-			});
-			localStream.current = stream;
-			localStream.current.getAudioTracks().forEach((t: any) => {
-				t.enabled = true;
-				t.contentHint = 'speech';
-			});
 			const devices: any = await mediaDevices.enumerateDevices();
 			setAvailableMics(devices.filter((d: any) => d.kind === 'audioinput'));
-
-			InCallManager.start({ media: 'audio', auto: true });
-			InCallManager.setForceSpeakerphoneOn(true);
-			InCallManager.setKeepScreenOn(true);
-		} catch (e) {
-			console.log("Mic init error", e);
-			Alert.alert('Ошибка', 'Не удалось инициализировать микрофон');
-		}
+		} catch (e) { }
 	};
 
 	// ✅ ЖЕСТКОЕ ВОССТАНОВЛЕНИЕ АУДИО
@@ -315,7 +286,7 @@ export default function InternetChatRoom() {
 	};
 
 	const connectToSocket = (targetRoom: string) => {
-		socket.current = io(serverUrlRef.current, { transports: ['websocket'], reconnection: true });
+		socket.current = io(BACKEND_URL, { transports: ['websocket'], reconnection: true });
 		socket.current.on("chat-history", (h: any[]) => setChatMessages(h.map(m => ({ ...m, isMe: m.sender === userName }))));
 		socket.current.on("signal", async (fromId: string, data: any) => {
 			try {
@@ -412,6 +383,11 @@ export default function InternetChatRoom() {
 		connectToSocket(target);
 
 		try {
+			// Если от прошлой сессии остался стрим — освобождаем микрофон
+			if (localStream.current) {
+				localStream.current.getTracks().forEach((t: any) => t.stop());
+				localStream.current = null;
+			}
 			const stream = await mediaDevices.getUserMedia({
 				audio: {
 					echoCancellation: false,
@@ -421,6 +397,10 @@ export default function InternetChatRoom() {
 					channelCount: 1,
 				} as any,
 				video: false
+			});
+			stream.getAudioTracks().forEach((t: any) => {
+				t.enabled = true;
+				t.contentHint = 'speech';
 			});
 			localStream.current = stream;
 
@@ -562,6 +542,10 @@ export default function InternetChatRoom() {
 				const sender = pc.getSenders().find((s: any) => s.track?.kind === 'audio');
 				if (sender) sender.replaceTrack(newTrack);
 			});
+			// Старый стрим обязательно останавливаем, иначе микрофон утекает
+			if (localStream.current) {
+				try { localStream.current.getTracks().forEach((t: any) => t.stop()); } catch { }
+			}
 			localStream.current = newStream;
 			setCurrentMicIdx(nextIdx);
 		} catch (e) { }
@@ -570,10 +554,14 @@ export default function InternetChatRoom() {
 	const stopAll = async () => {
 		if (activeInterval.current) clearInterval(activeInterval.current);
 		if (socket.current) socket.current.disconnect();
-		Object.values(peers.current).forEach(p => p.close());
 
-		await notifee.stopForegroundService();
-		await notifee.cancelNotification('mesh-intercom-fgs');
+		// Микрофон освобождаем ПЕРВЫМ и без await до него: если что-то ниже
+		// упадёт (например notifee на iOS), индикатор записи всё равно погаснет.
+		if (localStream.current) {
+			try { localStream.current.getTracks().forEach((t: any) => t.stop()); } catch { }
+			localStream.current = null;
+		}
+		Object.values(peers.current).forEach(p => { try { p.close(); } catch { } });
 
 		Object.values(peerKeepAlives.current).forEach(clearInterval);
 		peerKeepAlives.current = {};
@@ -582,11 +570,12 @@ export default function InternetChatRoom() {
 		deafenRef.current = false;
 		setIsDeafened(false);
 		setInRoom(false);
-		InCallManager.stop();
-		if (localStream.current) {
-			localStream.current.getTracks().forEach((t: any) => t.stop());
-			localStream.current = null;
-		}
+		try { InCallManager.stop(); } catch { }
+
+		try {
+			await notifee.stopForegroundService();
+			await notifee.cancelNotification('mesh-intercom-fgs');
+		} catch { }
 	};
 
 	return (
@@ -621,18 +610,6 @@ export default function InternetChatRoom() {
 											🔒 Имя задано во вкладке PROFILE
 										</Text>
 									)}
-									<View className="flex-row mt-2">
-										<Text className="text-slate-500 text-xs">Сервер: </Text>
-										<TextInput
-											value={serverUrl}
-											onChangeText={setServerUrl}
-											className="text-slate-400 text-xs flex-1"
-											placeholder={DEFAULT_SERVER_URL}
-											placeholderTextColor="#333"
-											autoCapitalize="none"
-											autoCorrect={false}
-										/>
-									</View>
 								</View>
 
 								<View className="p-6 bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl mt-5 mb-6">

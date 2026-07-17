@@ -166,6 +166,17 @@ export const sendChatMessage = (chatId: number, text: string) =>
 export const markChatRead = (chatId: number, lastId: number) =>
   request(`/chats/${chatId}/read`, { method: 'POST', body: { lastId } }).catch(() => {});
 
+export const addChatMembers = (chatId: number, memberIds: number[]) =>
+  request<{ chat: ChatSummary }>(`/chats/${chatId}/members`, {
+    method: 'POST',
+    body: { memberIds },
+  }).then((d) => d.chat);
+
+// «Звонок»: другим участникам чата прилетает уведомление с приглашением
+// в голосовую комнату chat-<id>
+export const startChatCall = (chatId: number) =>
+  request(`/chats/${chatId}/call`, { method: 'POST' });
+
 // ---------- Карта и заезды ----------
 
 export type FriendLocation = {
@@ -225,6 +236,9 @@ export const sendRideStats = (
 
 export const finishRide = (rideId: number) =>
   request<{ ride: RideInfo }>(`/rides/${rideId}/finish`, { method: 'POST' }).then((d) => d.ride);
+
+export const deleteRide = (rideId: number) =>
+  request(`/rides/${rideId}`, { method: 'DELETE' });
 
 export const setRideTrack = (rideId: number, points: TrackPoint[]) =>
   request<{ ride: RideInfo }>(`/rides/${rideId}/track`, {

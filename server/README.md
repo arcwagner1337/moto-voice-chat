@@ -101,15 +101,17 @@ sudo systemctl enable --now meshvoice
 - `GET /api/users/search?q=`
 - `GET /api/friends`, `POST /api/friends/request`, `POST /api/friends/respond`, `DELETE /api/friends/:userId`
 - `GET /api/chats`, `POST /api/chats/dm`, `POST /api/chats/group`
+- `POST /api/chats/:id/members` (добавить друзей в группу), `POST /api/chats/:id/call` (позвать в голосовую комнату)
 - `GET/POST /api/chats/:id/messages`, `POST /api/chats/:id/read`
 - `POST /api/location` (позиция; фоновый трекинг шлёт сюда), `GET /api/locations` (друзья)
 - `POST /api/rides` (создать заезд), `GET /api/rides/active`, `GET /api/rides/:id` (лидерборд),
-  `POST /api/rides/:id/join|track|finish` (track/finish — только организатор)
+  `POST /api/rides/:id/join|track|finish`, `DELETE /api/rides/:id` (track/finish/delete — только организатор)
 
 Статистика заездов (дистанция, макс/средняя скорость, чекпоинты трассы)
 считается сервером по входящим позициям — клиенту достаточно слать координаты.
 
 Realtime-события (socket.io, auth: `{token}`): `chat:new`, `chats:update`,
-`friends:update`, `rides:update`, `loc:friend`, `loc:friend-stop`; клиент шлёт
+`friends:update`, `friend:request`, `friend:accepted`, `call:incoming`,
+`rides:update`, `loc:friend`, `loc:friend-stop`; клиент шлёт
 `loc:update`/`loc:stop`. Анонимные подключения работают как раньше — только
 голосовой сигналинг (`join-room`, `signal`, `chat`).

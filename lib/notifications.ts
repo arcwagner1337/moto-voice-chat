@@ -1,5 +1,5 @@
 import notifee, { AndroidImportance } from '@notifee/react-native';
-import { ChatMessage, getSavedUser } from './api';
+import { ChatMessage, SocialUser, getSavedUser } from './api';
 import { getSocialSocket } from './socialSocket';
 
 // Какой чат сейчас открыт на экране — по нему уведомления не показываем
@@ -28,7 +28,33 @@ async function showMessageNotification(msg: ChatMessage) {
   });
 }
 
-// Подписка на входящие сообщения для показа уведомлений.
+async function showSocialNotification(opts: {
+  id: string;
+  title: string;
+  body: string;
+  data: { [k: string]: string };
+  channel?: { id: string; name: string };
+}) {
+  const ch = opts.channel || { id: 'social', name: 'Друзья и звонки' };
+  const channelId = await notifee.createChannel({
+    id: ch.id,
+    name: ch.name,
+    importance: AndroidImportance.HIGH,
+    sound: 'default',
+  });
+  await notifee.displayNotification({
+    id: opts.id,
+    title: opts.title,
+    body: opts.body,
+    data: opts.data,
+    android: {
+      channelId,
+      pressAction: { id: 'default', launchActivity: 'default' },
+    },
+  });
+}
+
+// Подписка на входящие сообщения/заявки/звонки для показа уведомлений.
 // Идемпотентна: на один сокет вешается один обработчик. Вызывается при
 // старте приложения и после входа в аккаунт.
 export async function initMessageNotifications() {
@@ -47,6 +73,43 @@ export async function initMessageNotifications() {
       // уведомление — не критичная операция
     }
   });
+
+  sock.on('friend:request', async ({ from }: { from: SocialUser }) => {
+    try {
+      await showSocialNotification({
+        id: `friend-req-${from.id}`,
+        title: '🤝 Заявка в друзья',
+        body: `${from.avatar} ${from.displayName} (@${from.username}) хочет добавиться в друзья`,
+        data: { screen: 'social' },
+      });
+    } catch {}
+  });
+
+  sock.on('friend:accepted', async ({ from }: { from: SocialUser }) => {
+    try {
+      await showSocialNotification({
+        id: `friend-acc-${from.id}`,
+        title: '✅ Заявка принята',
+        body: `Теперь вы друзья с ${from.avatar} ${from.displayName}`,
+        data: { screen: 'social' },
+      });
+    } catch {}
+  });
+
+  sock.on(
+    'call:incoming',
+    async ({ chatId, room, title, from }: { chatId: number; room: string; title: string; from: SocialUser }) => {
+      try {
+        await showSocialNotification({
+          id: `call-${chatId}`,
+          title: '📞 Входящий звонок',
+          body: `${from.avatar} ${from.displayName} зовёт в голосовой чат «${title}»`,
+          data: { room },
+          channel: { id: 'calls', name: 'Звонки' },
+        });
+      } catch {}
+    }
+  );
 }
 
 export async function cancelChatNotification(chatId: number) {

@@ -1,6 +1,7 @@
 import { Stack, useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -16,6 +17,7 @@ import {
   joinRide,
   getRide,
   finishRide,
+  deleteRide,
   setRideTrack,
 } from '../../lib/api';
 import { getSocialSocket } from '../../lib/socialSocket';
@@ -26,6 +28,9 @@ import {
   isBackgroundTrackingActive,
 } from '../../lib/backgroundLocation';
 import { MAP_HTML } from '../../lib/mapHtml';
+
+// Трансляция позиции включается сама; флаг хранит явный отказ пользователя
+const SHARING_OFF_KEY = '@map_sharing_off';
 
 type MarkerData = {
   id: string;
@@ -168,7 +173,14 @@ export default function MapScreen() {
         } else {
           setActiveRide(fresh);
         }
-      } catch {}
+      } catch (e) {
+        // Организатор удалил заезд — закрываем панель у всех участников
+        if ((e as Error).message === 'Заезд не найден') {
+          setActiveRide(null);
+          setEditingTrack(false);
+          refreshRides();
+        }
+      }
     }, 5000);
     return () => clearInterval(timer);
   }, [activeRide?.id]);
@@ -212,6 +224,8 @@ export default function MapScreen() {
         if (!active) return;
         setUser(saved);
         setBgTracking(await isBackgroundTrackingActive());
+        // Позиция транслируется автоматически, пока пользователь сам не выключил
+        if (saved && !(await AsyncStorage.getItem(SHARING_OFF_KEY))) setSharing(true);
         if (saved) {
           refreshFriendLocations();
           refreshRides();
@@ -236,6 +250,17 @@ export default function MapScreen() {
   );
 
   // ---------- Действия ----------
+
+  const toggleSharing = () => {
+    setSharing((v) => {
+      const next = !v;
+      (next
+        ? AsyncStorage.removeItem(SHARING_OFF_KEY)
+        : AsyncStorage.setItem(SHARING_OFF_KEY, '1')
+      ).catch(() => {});
+      return next;
+    });
+  };
 
   const toggleBgTracking = async () => {
     if (bgTracking) {
@@ -289,6 +314,28 @@ export default function MapScreen() {
             await finishRide(activeRide.id);
             setActiveRide(null);
             setEditingTrack(false);
+            refreshRides();
+          } catch (e) {
+            Alert.alert('Ошибка', (e as Error).message);
+          }
+        },
+      },
+    ]);
+  };
+
+  const removeRide = (ride: RideInfo) => {
+    Alert.alert('Удалить заезд?', `«${ride.name}» исчезнет у всех участников без итогов`, [
+      { text: 'Отмена', style: 'cancel' },
+      {
+        text: 'Удалить',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteRide(ride.id);
+            if (activeRideRef.current?.id === ride.id) {
+              setActiveRide(null);
+              setEditingTrack(false);
+            }
             refreshRides();
           } catch (e) {
             Alert.alert('Ошибка', (e as Error).message);
@@ -400,7 +447,7 @@ export default function MapScreen() {
           {!fullMap && (
           <View className="mx-5 mt-3 flex-row gap-2">
             <TouchableOpacity
-              onPress={() => setSharing((v) => !v)}
+              onPress={toggleSharing}
               className={`flex-1 p-3 rounded-2xl border items-center ${
                 sharing ? 'bg-cyan-500/10 border-cyan-500/50' : 'bg-slate-900 border-slate-800'
               }`}
@@ -440,12 +487,20 @@ export default function MapScreen() {
                     </Text>
                   </View>
                   {isOrganizer ? (
-                    <TouchableOpacity
-                      onPress={finish}
-                      className="bg-red-500/10 px-4 py-2 rounded-full border border-red-500/40"
-                    >
-                      <Text className="text-red-500 font-bold text-[10px] uppercase">Финиш</Text>
-                    </TouchableOpacity>
+                    <View className="flex-row gap-2">
+                      <TouchableOpacity
+                        onPress={finish}
+                        className="bg-red-500/10 px-4 py-2 rounded-full border border-red-500/40"
+                      >
+                        <Text className="text-red-500 font-bold text-[10px] uppercase">Финиш</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => removeRide(activeRide)}
+                        className="bg-slate-800 px-3 py-2 rounded-full border border-slate-700"
+                      >
+                        <Text className="text-slate-400 text-[10px]">🗑</Text>
+                      </TouchableOpacity>
+                    </View>
                   ) : (
                     <TouchableOpacity
                       onPress={leaveRide}
@@ -608,6 +663,14 @@ export default function MapScreen() {
                             {r.amMember ? 'Продолжить' : 'Участвовать'}
                           </Text>
                         </TouchableOpacity>
+                        {r.creator?.id === user.id && (
+                          <TouchableOpacity
+                            onPress={() => removeRide(r)}
+                            className="ml-2 px-3 py-2 rounded-xl bg-slate-900 border border-red-500/30"
+                          >
+                            <Text className="text-[12px]">🗑</Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
                     ))}
                   </View>

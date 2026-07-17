@@ -18,6 +18,9 @@ import {
   getMessages,
   sendChatMessage,
   markChatRead,
+  getFriends,
+  addChatMembers,
+  startChatCall,
 } from '../../lib/api';
 import { getSocialSocket } from '../../lib/socialSocket';
 import { setOpenChat, cancelChatNotification } from '../../lib/notifications';
@@ -32,6 +35,37 @@ export default function ChatScreen() {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const flatListRef = useRef<any>(null);
+
+  // Добавление друзей в группу
+  const [showAdd, setShowAdd] = useState(false);
+  const [addable, setAddable] = useState<SocialUser[]>([]);
+
+  const openAddMembers = async () => {
+    try {
+      const { friends } = await getFriends();
+      const memberIds = new Set((chat?.members || []).map((m) => m.id));
+      setAddable(friends.filter((f) => !memberIds.has(f.id)));
+      setShowAdd(true);
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    }
+  };
+
+  const addMember = async (friend: SocialUser) => {
+    try {
+      const fresh = await addChatMembers(chatId, [friend.id]);
+      setChat(fresh);
+      setAddable((prev) => prev.filter((f) => f.id !== friend.id));
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    }
+  };
+
+  const call = () => {
+    // Остальным участникам прилетит уведомление «входящий звонок»
+    startChatCall(chatId).catch(() => {});
+    router.push({ pathname: '/(tabs)/three', params: { room: `chat-${chatId}` } });
+  };
 
   const onNew = useCallback(
     (msg: ChatMessage) => {
@@ -123,15 +157,53 @@ export default function ChatScreen() {
                   : 'offline'}
             </Text>
           </View>
+          {chat?.type === 'group' && (
+            <TouchableOpacity
+              onPress={openAddMembers}
+              className="w-10 h-10 rounded-xl bg-slate-900 border border-cyan-500/40 items-center justify-center mr-2"
+            >
+              <Text className="text-cyan-400 text-lg font-bold">＋</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
-            onPress={() =>
-              router.push({ pathname: '/(tabs)/three', params: { room: `chat-${chatId}` } })
-            }
+            onPress={call}
             className="w-10 h-10 rounded-xl bg-green-500/10 border border-green-500/40 items-center justify-center"
           >
             <Text className="text-lg">📞</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Панель добавления друзей в группу */}
+        {showAdd && (
+          <View className="mx-4 mt-3 p-4 bg-slate-900 rounded-3xl border border-cyan-500/30">
+            <View className="flex-row justify-between items-center mb-2">
+              <Text className="text-cyan-400 font-bold uppercase text-[10px] tracking-widest">
+                Добавить в группу
+              </Text>
+              <TouchableOpacity onPress={() => setShowAdd(false)}>
+                <Text className="text-slate-500 font-bold px-2">✕</Text>
+              </TouchableOpacity>
+            </View>
+            {addable.length === 0 ? (
+              <Text className="text-slate-500 text-xs">Все ваши друзья уже в группе</Text>
+            ) : (
+              addable.map((f) => (
+                <TouchableOpacity
+                  key={f.id}
+                  onPress={() => addMember(f)}
+                  className="flex-row items-center p-3 bg-slate-950 rounded-2xl border border-slate-800 mb-1.5"
+                >
+                  <Text className="text-xl mr-3">{f.avatar}</Text>
+                  <View className="flex-1">
+                    <Text className="text-white font-bold text-sm">{f.displayName}</Text>
+                    <Text className="text-slate-500 font-mono text-[10px]">@{f.username}</Text>
+                  </View>
+                  <Text className="text-cyan-400 font-bold text-[10px] uppercase">＋ Добавить</Text>
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        )}
 
         {/* Сообщения */}
         <FlatList

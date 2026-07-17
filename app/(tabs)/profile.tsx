@@ -13,12 +13,13 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../../components/ScreenHeader';
 import { AVATARS, loadProfile, saveProfile } from '../../lib/profile';
-import { updateMe } from '../../lib/api';
+import { SocialUser, getSavedUser, updateMe } from '../../lib/api';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState(AVATARS[0]);
+  const [account, setAccount] = useState<SocialUser | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
 
   useFocusEffect(
@@ -27,6 +28,7 @@ export default function ProfileScreen() {
         setName(p.name);
         setAvatar(p.avatar);
       });
+      getSavedUser().then(setAccount);
     }, [])
   );
 
@@ -109,7 +111,9 @@ export default function ProfileScreen() {
               <Text className="text-3xl mr-3">{avatar}</Text>
               <View className="flex-1">
                 <Text className="text-white font-bold">{name.trim() || 'Имя не задано'}</Text>
-                <Text className="text-slate-500 font-mono text-[10px]">rider_id</Text>
+                <Text className="text-slate-500 font-mono text-[10px]">
+                  {account ? `@${account.username}` : 'нет аккаунта — вкладка FRIENDS'}
+                </Text>
               </View>
             </View>
 

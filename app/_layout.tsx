@@ -20,18 +20,26 @@ function AppContent() {
     // Уведомления о новых сообщениях (пока приложение живо: открыто или в фоне)
     initMessageNotifications();
 
-    // Нажатие на уведомление при открытом приложении — переход в чат
-    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
-      const chatId = detail.notification?.data?.chatId;
-      if (type === EventType.PRESS && chatId) {
-        router.push(`/chat/${chatId}`);
+    // Куда ведёт нажатие на уведомление: звонок — в голосовую комнату,
+    // сообщение — в чат, заявка в друзья — на вкладку FRIENDS
+    const openFromNotification = (data?: { [k: string]: any }) => {
+      if (!data) return;
+      if (data.room) {
+        router.push({ pathname: '/(tabs)/three', params: { room: String(data.room) } });
+      } else if (data.chatId) {
+        router.push(`/chat/${data.chatId}`);
+      } else if (data.screen === 'social') {
+        router.push('/(tabs)/social');
       }
+    };
+
+    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
+      if (type === EventType.PRESS) openFromNotification(detail.notification?.data);
     });
 
     // Приложение открыто нажатием на уведомление из фона
     notifee.getInitialNotification().then((initial) => {
-      const chatId = initial?.notification?.data?.chatId;
-      if (chatId) router.push(`/chat/${chatId}`);
+      openFromNotification(initial?.notification?.data);
     });
 
     return unsubscribe;

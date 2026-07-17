@@ -142,6 +142,7 @@ api.post('/friends/request', requireAuth, (req, res) => {
     if (existing.from_id === targetId) {
       db.prepare("UPDATE friendships SET status = 'accepted' WHERE id = ?").run(existing.id);
       notifyUser(targetId, 'friends:update', {});
+      notifyUser(targetId, 'friend:accepted', { from: getUserById(userId) });
       return res.json({ ok: true, accepted: true });
     }
     return res.status(409).json({ error: 'Заявка уже отправлена' });
@@ -150,6 +151,7 @@ api.post('/friends/request', requireAuth, (req, res) => {
   db.prepare('INSERT INTO friendships (from_id, to_id, status, created_at) VALUES (?, ?, ?, ?)')
     .run(userId, targetId, 'pending', now());
   notifyUser(targetId, 'friends:update', {});
+  notifyUser(targetId, 'friend:request', { from: getUserById(userId) });
   res.json({ ok: true });
 });
 
@@ -164,6 +166,7 @@ api.post('/friends/respond', requireAuth, (req, res) => {
 
   if (accept) {
     db.prepare("UPDATE friendships SET status = 'accepted' WHERE id = ?").run(row.id);
+    notifyUser(fromId, 'friend:accepted', { from: getUserById(userId) });
   } else {
     db.prepare('DELETE FROM friendships WHERE id = ?').run(row.id);
   }
@@ -300,6 +303,55 @@ api.post('/chats/group', requireAuth, (req, res) => {
     notifyUser(id, 'chats:update', {});
   }
   res.json({ chat: chatInfo(chatId, userId) });
+});
+
+// Добавить людей в существующую группу. Может любой участник,
+// добавлять можно только своих друзей (как при создании группы).
+api.post('/chats/:id/members', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const chatId = Number(req.params.id);
+  const chat: any = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+  if (!chat || !isChatMember(chatId, userId)) return res.status(403).json({ error: 'Нет доступа' });
+  if (chat.type !== 'group') return res.status(400).json({ error: 'Добавлять можно только в группу' });
+
+  const memberIds: number[] = Array.isArray(req.body?.memberIds)
+    ? req.body.memberIds.map(Number).filter((n: number) => n && n !== userId)
+    : [];
+  if (memberIds.length < 1) return res.status(400).json({ error: 'Выберите хотя бы одного друга' });
+  for (const id of memberIds) {
+    if (!areFriends(userId, id)) {
+      return res.status(403).json({ error: 'Добавлять можно только своих друзей' });
+    }
+  }
+
+  const addMember = db.prepare('INSERT INTO chat_members (chat_id, user_id, joined_at) VALUES (?, ?, ?)');
+  for (const id of memberIds) {
+    if (!isChatMember(chatId, id)) addMember.run(chatId, id, now());
+  }
+  const members: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+  for (const m of members) notifyUser(m.user_id, 'chats:update', {});
+  res.json({ chat: chatInfo(chatId, userId) });
+});
+
+// Звонок в чате: участникам уходит realtime-событие «входящий звонок»
+// с комнатой INTERNET CALL этого чата (chat-<id>).
+api.post('/chats/:id/call', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const chatId = Number(req.params.id);
+  if (!isChatMember(chatId, userId)) return res.status(403).json({ error: 'Нет доступа' });
+  const from = getUserById(userId);
+  const members: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+  for (const m of members) {
+    if (m.user_id === userId) continue;
+    const info = chatInfo(chatId, m.user_id);
+    notifyUser(m.user_id, 'call:incoming', {
+      chatId,
+      room: `chat-${chatId}`,
+      title: info?.title || 'Чат',
+      from,
+    });
+  }
+  res.json({ ok: true });
 });
 
 api.post('/chats/:id/read', requireAuth, (req, res) => {
@@ -447,9 +499,11 @@ api.get('/rides/active', requireAuth, (req, res) => {
 api.get('/rides/:id', requireAuth, (req, res) => {
   const userId = (req as AuthedRequest).userId;
   const rideId = Number(req.params.id);
-  if (!canSeeRide(rideId, userId)) return res.status(403).json({ error: 'Нет доступа' });
+  // Сначала существование: удалённый заезд должен отдавать 404, а не 403 —
+  // по «Заезд не найден» клиент закрывает панель заезда
   const info = rideInfo(rideId);
   if (!info) return res.status(404).json({ error: 'Заезд не найден' });
+  if (!canSeeRide(rideId, userId)) return res.status(403).json({ error: 'Нет доступа' });
   res.json({ ride: info });
 });
 
@@ -529,6 +583,22 @@ api.post('/rides/:id/finish', requireAuth, (req, res) => {
   const members: any[] = db.prepare('SELECT user_id FROM ride_members WHERE ride_id = ?').all(rideId);
   for (const m of members) notifyUser(m.user_id, 'rides:update', {});
   res.json({ ride: rideInfo(rideId) });
+});
+
+// Удалить заезд целиком (только создатель, в любом статусе)
+api.delete('/rides/:id', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const rideId = Number(req.params.id);
+  const ride: any = db.prepare('SELECT * FROM rides WHERE id = ?').get(rideId);
+  if (!ride) return res.status(404).json({ error: 'Заезд не найден' });
+  if (ride.created_by !== userId) {
+    return res.status(403).json({ error: 'Удалить заезд может только создатель' });
+  }
+  const members: any[] = db.prepare('SELECT user_id FROM ride_members WHERE ride_id = ?').all(rideId);
+  db.prepare('DELETE FROM ride_members WHERE ride_id = ?').run(rideId);
+  db.prepare('DELETE FROM rides WHERE id = ?').run(rideId);
+  for (const m of members) notifyUser(m.user_id, 'rides:update', {});
+  res.json({ ok: true });
 });
 
 // ---------- Сообщения ----------

@@ -1,0 +1,28 @@
+diff --git a/node_modules/react-native-incall-manager/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java b/node_modules/react-native-incall-manager/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
+index 10cb1e5..9a7a75d 100644
+--- a/node_modules/react-native-incall-manager/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
++++ b/node_modules/react-native-incall-manager/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
+@@ -163,7 +163,10 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements L
+ 
+     // Contains a list of available audio devices. A Set collection is used to
+     // avoid duplicate elements.
+-    private Set<AudioDevice> audioDevices = new HashSet<>();
++    // Потокобезопасный набор: getAudioDeviceStatusMap() перебирает его в UI-потоке,
++    // пока Bluetooth/headset-приёмник меняет состав в другом потоке. HashSet бросал
++    // ConcurrentModificationException; CopyOnWriteArraySet итерируется по снапшоту.
++    private Set<AudioDevice> audioDevices = new java.util.concurrent.CopyOnWriteArraySet<>();
+ 
+     interface MyPlayerInterface {
+         public boolean isPlaying();
+@@ -1794,8 +1797,9 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements L
+ 
+             // Store state which is set to true if the device list has changed.
+             boolean audioDeviceSetUpdated = !audioDevices.equals(newAudioDevices);
+-            // Update the existing audio device set.
+-            audioDevices = newAudioDevices;
++            // Update the existing audio device set (снова COW, чтобы поле всегда
++            // оставалось потокобезопасным после переприсваивания).
++            audioDevices = new java.util.concurrent.CopyOnWriteArraySet<>(newAudioDevices);
+ 
+             AudioDevice newAudioDevice = getPreferredAudioDevice();
+ 

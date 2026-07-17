@@ -24,3 +24,8 @@ android
 .metro-health-check*
 # npm lockfile — канонический lock это bun.lock
 package-lock.json
+
+# логи локального сервера
+server/*.log
+server/*.db
+server/*.db-*

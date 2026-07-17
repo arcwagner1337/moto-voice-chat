@@ -56,11 +56,17 @@ jobs:
         run: |
           echo "$KEYSTORE_B64" | base64 -d > release.keystore
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          "$BUILD_TOOLS/apksigner" sign \
-            --ks release.keystore \
-            --ks-pass env:KEYSTORE_PASSWORD \
-            --ks-key-alias "$KEY_ALIAS" \
-            --key-pass env:KEY_PASSWORD \
+          ARGS=(--ks release.keystore --ks-pass env:KEYSTORE_PASSWORD)
+          # Необязательные секреты: без алиаса apksigner берёт единственный ключ
+          # из keystore, без пароля ключа — пробует пароль самого keystore
+          # (для PKCS12 они всегда совпадают).
+          if [ -n "$KEY_ALIAS" ]; then
+            ARGS+=(--ks-key-alias "$KEY_ALIAS")
+          fi
+          if [ -n "$KEY_PASSWORD" ]; then
+            ARGS+=(--key-pass env:KEY_PASSWORD)
+          fi
+          "$BUILD_TOOLS/apksigner" sign "${ARGS[@]}" \
             android/app/build/outputs/apk/release/app-release.apk
           rm -f release.keystore
 

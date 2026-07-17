@@ -1,0 +1,76 @@
+name: Android Release APK
+
+# Production-сборка APK для распространения вне Play Market (прямая установка).
+# Запуск: вручную со вкладки Actions (Run workflow) или коммитом с [RELEASE] в сообщении.
+#
+# Подпись: по умолчанию — стандартный debug-ключ (APK ставится сразу).
+# Чтобы подписывать своим ключом, добавьте секреты репозитория:
+#   ANDROID_KEYSTORE_BASE64  — keystore-файл в base64 (base64 -w0 my.keystore)
+#   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# ВАЖНО: при смене ключа подписи старое приложение нужно удалить с телефона.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[RELEASE]')
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Expo Prebuild
+        run: npx expo prebuild --platform android
+
+      - name: Build Release APK
+        run: |
+          cd android
+          ./gradlew assembleRelease
+
+      - name: Re-sign with production keystore
+        if: env.KEYSTORE_B64 != ''
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > release.keystore
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks release.keystore \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass env:KEY_PASSWORD \
+            android/app/build/outputs/apk/release/app-release.apk
+          rm -f release.keystore
+
+      - name: Verify APK signature
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --print-certs android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: moto-voice-chat-release
+          path: android/app/build/outputs/apk/release/app-release.apk

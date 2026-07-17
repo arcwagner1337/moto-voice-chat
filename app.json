@@ -38,7 +38,20 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bitcode": false,
+      "bundleIdentifier": "com.anonymous.myapp",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "audio",
+          "voip"
+        ],
+        "NSMicrophoneUsageDescription": "Микрофон нужен для голосовой связи с другими участниками.",
+        "NSLocalNetworkUsageDescription": "Доступ к локальной сети нужен для поиска участников рядом (mesh-режим COMM_CENTER).",
+        "NSBonjourServices": [
+          "_voicechat._tcp"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -52,7 +65,8 @@
         "android.permission.FOREGROUND_SERVICE_MICROPHONE",
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.WAKE_LOCK"
-      ]
+      ],
+      "package": "com.anonymous.myapp"
     }
   }
 }

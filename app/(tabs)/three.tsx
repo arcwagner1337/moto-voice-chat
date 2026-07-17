@@ -28,7 +28,6 @@ const USER_NAME_KEY = "@user_custom_name";
 
 const configuration = {
 	iceServers: [
-		{ urls: 'stun:google.com' },
 		{ urls: 'stun:stun.l.google.com:19302' }
 	]
 };

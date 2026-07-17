@@ -86,10 +86,40 @@ Bash-команде (cwd сбрасывается между вызовами).
   `ANDROID_KEYSTORE_BASE64/…_PASSWORD/…_KEY_ALIAS/**ANDROID_KEY_PASSWORD**`.
   **Открытая проблема**: `ANDROID_KEY_PASSWORD` (пароль именно ключа, не
   keystore) владельцем ещё не добавлен → релиз выходит с debug-подписью.
+  Шаг «Bump Gradle heap» поднимает `-Xmx4096m` (иначе OOM при упаковке APK).
+- `eas-update.yml` — авто-публикация OTA (`eas update`) на push в `main`, кроме
+  коммитов с `[BUILD]`/`[RELEASE]` и путей `server/**`, `.github/**`, `*.md`.
+  См. раздел «OTA-обновления».
 - Каждый push создаёт 2 строки в Actions — вторая (без тега) пропускается, это норма.
 - **Native vs JS**: изменения в `app.json`, `plugins/`, новых нативных модулях →
-  тег `[BUILD]` (нужна пересборка APK). Чистый JS/TS → **пересборка НЕ нужна**,
-  правки прилетают в dev-клиент сразу.
+  тег `[BUILD]` (нужна пересборка APK). Чистый JS/TS → **пересборка НЕ нужна**:
+  в dev-клиент прилетает сразу, в release-APK — через OTA (см. ниже).
+
+## OTA-обновления (EAS Update)
+
+JS/TS-правки доезжают до установленных release-приложений без пересборки APK.
+
+- **Конфиг**: `expo-updates` (версия строго под SDK — сейчас `~29.0.19`, берётся из
+  `expo/bundledNativeModules.json`, НЕ ставить вручную свежий major!). В `app.json`:
+  `updates.url = https://u.expo.dev/<projectId>`, `updates.requestHeaders`
+  `{expo-channel-name: production}`, `runtimeVersion.policy = appVersion`.
+- **Канал/ветка**: канал `production` (вшит в сборку) → ветка `production` в EAS.
+  `eas.json` описывает профили и каналы. Публикация: `eas update --branch production`.
+- **Авто-публикация**: `eas-update.yml` гоняет `eas update` на каждый JS-push в `main`.
+  Секрет `EXPO_TOKEN` уже есть. Аккаунт EAS — `owner: 1mposs1bl3`,
+  `projectId b4c8eba9-d9ff-4978-a983-2c262c956a31`.
+- **Как применяется на телефоне**: по умолчанию (`checkAutomatically: ON_LOAD`)
+  запуск N качает апдейт в фоне, запуск N+1 показывает. Кастомного `Updates.*`
+  UI в коде нет.
+- **ЖЕЛЕЗНОЕ правило runtimeVersion**: политика `appVersion` → все сборки с одним
+  `version` (`1.0.0`) делят runtimeVersion. **Любое нативное изменение (новый модуль,
+  разрешение) без бампа `version` = OTA с новым JS прилетит на старый бинарник и
+  уронит его.** Меняешь нативное → подними `expo.version` (и делай `[RELEASE]`),
+  чтобы runtimeVersion разошлись.
+- **Разовая настройка владельцем** (если канал ещё не создан): `eas login` под
+  `1mposs1bl3`, затем `eas channel:create production` (создаёт канал+ветку и
+  связывает их). Плюс поставить на телефон свежий `[RELEASE]`-APK с вшитым каналом —
+  только с него OTA и заработает.
 
 ## Критические инварианты (не ломать)
 

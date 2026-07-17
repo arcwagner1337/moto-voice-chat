@@ -3,7 +3,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const PROFILE_NAME_KEY = '@profile_name';
 const PROFILE_AVATAR_KEY = '@profile_avatar';
 
-export const AVATARS = ['🏍️', '🪖', '⚡', '🔥', '🐺', '🦅', '💀', '🤖'];
+export const AVATARS = [
+  '🏍️', '🪖', '⚡', '🔥', '🐺', '🦅', '💀', '🤖',
+  '🛞', '⛽', '🔩', '🧿', '👹', '🐉', '🦂', '🕷️',
+  '🎯', '🛡️', '⚙️', '🧭', '🔱', '☠️', '🐍', '🦇',
+  '☯️', '☢️', '☣️', '⚔️', '✂️', '⚓', '✈️', '⚕️',
+  '⚜️', '♠️', '♣️', '⭐', '♦️', '✨', '⚖️', '☄️',
+];
 
 export type Profile = {
   // Пустая строка = имя не задано, поля ников в комнатах остаются свободными

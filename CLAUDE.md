@@ -107,13 +107,85 @@ Bash-команде (cwd сбрасывается между вызовами).
 - HTTPS обязателен для release Android (cleartext) и iOS (ATS). Локально `http://LAN`
   работает только в dev-сборке.
 
-## Статус и отложенное
+## Текущее состояние среды (волатильно — сверяй при старте)
 
-- Хостинг бэкенда: выбран Oracle Cloud Always Free (инструкция в
-  `server/README.md`), пока владелец тестирует с локалки (`BACKEND_URL` = LAN-IP
-  ноута; IP меняется между сетями — проверяй `ip -4 addr` при жалобах на коннект).
-- Отложено: FCM-пуши для полностью закрытого приложения (нужен google-services.json
-  владельца для `com.anonymous.myapp`); запись/отрисовка GPS-полилинии трассы.
+- Бэкенд тестируется **с локалки**: `BACKEND_URL` в `lib/config.ts` = LAN-IP
+  ноута (последнее — `http://192.168.0.106:3000`). IP меняется между сетями —
+  при жалобах на коннект проверь `ip -4 addr` и обнови константу.
+- Боевой локальный сервер слушает **:3000**, база `server/meshvoice.db` (реальные
+  аккаунты владельца — НЕ удалять, НЕ тестировать на ней; тесты только на
+  изолированной `DB_PATH`+`PORT=3999`). Живой процесс не подхватывает пересборку
+  `dist` — перезапускай после правок `server/src`.
+- Хостинг: выбран Oracle Cloud Always Free (инструкция в `server/README.md`),
+  переезд отложен владельцем.
+
+## Отложенные задачи
+
+- FCM-пуши для полностью закрытого приложения (нужен google-services.json
+  владельца для `com.anonymous.myapp`); сейчас уведомления работают, только пока
+  приложение живо (открыто или в фоне).
+- Запись/отрисовка GPS-полилинии реально пройденной трассы.
+- iOS-баги: владелец обещал детали позже (тестирует с macOS отдельно). Известный
+  и уже починенный — микрофон не освобождался после выхода из войса.
+- Владелец должен добавить секрет `ANDROID_KEY_PASSWORD` для production-подписи.
+
+## Справочник REST API (`/api`, base = `BACKEND_URL`)
+
+Все, кроме `/register` и `/login`, требуют `Authorization: Bearer <jwt>`.
+Клиентские обёртки — в `lib/api.ts`.
+
+**Аккаунты:** `POST /register` `{username,password,displayName?,avatar?}` →
+`{token,user}` · `POST /login` `{username,password}` → `{token,user}` ·
+`GET /me` · `PUT /me` `{displayName?,avatar?}`.
+
+**Друзья:** `GET /users/search?q=` (rel в каждом: none/friends/pending_out/
+pending_in) · `GET /friends` → `{friends,incoming,outgoing}` ·
+`POST /friends/request` `{userId}` (встречная заявка → `{accepted:true}`) ·
+`POST /friends/respond` `{userId,accept}` · `DELETE /friends/:userId`.
+
+**Чаты:** `GET /chats` · `GET /chats/:id` · `POST /chats/dm` `{userId}` (только
+друзья) · `POST /chats/group` `{name,memberIds}` · `POST /chats/:id/members`
+`{memberIds}` (добавить друзей в группу) · `POST /chats/:id/call` (шлёт
+`call:incoming` участникам) · `POST /chats/:id/read` `{lastId}` ·
+`GET /chats/:id/messages?before=&limit=` · `POST /chats/:id/messages` `{text}`.
+
+**Позиции:** `POST /location` `{lat,lng,speed?,heading?}` (фоновый трекинг шлёт
+сюда) · `GET /locations` (позиции друзей).
+
+**Заезды:** `POST /rides` `{name}` · `GET /rides/active` · `GET /rides/history`
+(finished, до 30) · `GET /rides/:id` · `POST /rides/:id/join` ·
+`POST /rides/:id/track` `{points:[{lat,lng}]}` (≤50, только организатор,
+сбрасывает чекпоинты) · `POST /rides/:id/stats` (legacy, статы обычно считает
+сервер) · `POST /rides/:id/finish` (создатель; статус→finished, НЕ удаляет) ·
+`DELETE /rides/:id` (создатель; удаляет насовсем). Лидерборд с трассой
+сортируется по чекпоинтам, без — по дистанции.
+
+## Справочник socket.io
+
+Подключение соцсети: `io(BACKEND_URL,{auth:{token}})` (`lib/socialSocket.ts`).
+**Сервер → клиент:** `chat:new` (объект сообщения), `chats:update`,
+`friends:update`, `friend:request` `{from}`, `friend:accepted` `{from}`,
+`call:incoming` `{chatId,room,title,from}`, `rides:update`, `loc:friend`
+`{userId,lat,lng,speed}`, `loc:friend-stop` `{userId}`.
+**Клиент → сервер:** `loc:update` `{lat,lng,speed,heading}`, `loc:stop`.
+
+Голосовой сигналинг (отдельный сокет в `three.tsx`, анонимный):
+`join-room`/`signal`/`chat` (клиент) → `user-joined`/`user-left`/`signal`/
+`chat`/`chat-history` (сервер).
+
+## Схема БД (`server/src/db.ts`, node:sqlite)
+
+- **users**(id, username UNIQUE NOCASE, password_hash, display_name, avatar, created_at)
+- **friendships**(id, from_id, to_id, status[pending|accepted], created_at, UNIQUE(from,to))
+- **chats**(id, type[dm|group], name?, created_by, created_at)
+- **chat_members**(chat_id, user_id, joined_at, last_read_id) PK(chat,user)
+- **messages**(id, chat_id, sender_id, text, created_at)
+- **rides**(id, name, created_by, status[active|finished], track?[JSON], created_at, finished_at?)
+- **ride_members**(ride_id, user_id, joined_at, distance, max_speed, avg_speed,
+  duration, checkpoint, last_lat/lng/ts, updated_at) PK(ride,user)
+
+Миграции — идемпотентные `ALTER TABLE` в try/catch (добавление колонок к
+существующим базам). Новую колонку добавляй И в `CREATE TABLE`, И в миграции.
 
 ## Рабочий процесс
 

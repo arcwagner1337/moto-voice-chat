@@ -46,6 +46,18 @@ jobs:
       - name: Expo Prebuild
         run: npx expo prebuild --platform android
 
+      - name: Bump Gradle heap
+        # Упаковка release-APK (ApkFlinger) падала с OutOfMemoryError на
+        # дефолтных -Xmx2048m из Expo/RN-шаблона. Поднимаем кучу Gradle-демона.
+        run: |
+          cd android
+          if grep -q '^org.gradle.jvmargs=' gradle.properties; then
+            sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8/' gradle.properties
+          else
+            echo 'org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8' >> gradle.properties
+          fi
+          grep '^org.gradle.jvmargs=' gradle.properties
+
       - name: Build Release APK
         run: |
           cd android

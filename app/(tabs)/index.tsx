@@ -7,6 +7,7 @@ import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Audio } from 'expo-av';
 import { loadProfile } from '../../lib/profile';
+import { pingServer } from '../../lib/api';
 import ScreenHeader from '../../components/ScreenHeader';
 
 export default function ProjectInfo() {
@@ -16,6 +17,8 @@ export default function ProjectInfo() {
   const [isServiceActive, setIsServiceActive] = useState(false);
   const [profileName, setProfileName] = useState('');
   const [profileAvatar, setProfileAvatar] = useState('👤');
+  // null = проверяем, true = сервер отвечает, false = недоступен
+  const [serverOnline, setServerOnline] = useState<boolean | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -23,6 +26,23 @@ export default function ProjectInfo() {
         setProfileName(p.name);
         setProfileAvatar(p.avatar || '👤');
       });
+    }, [])
+  );
+
+  // Пинг бэкенда: сразу при фокусе и далее каждые 15 секунд, пока экран открыт
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      const check = async () => {
+        const ok = await pingServer();
+        if (active) setServerOnline(ok);
+      };
+      check();
+      const timer = setInterval(check, 15000);
+      return () => {
+        active = false;
+        clearInterval(timer);
+      };
     }, [])
   );
 
@@ -86,7 +106,7 @@ export default function ProjectInfo() {
       <ScrollView
         contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16 }}
         showsVerticalScrollIndicator={false}>
-        <ScreenHeader title="MESH_VOICE" subtitle="v2.0.4 dashboard" />
+        <ScreenHeader title="MESH_VOICE" subtitle="v2.0.2 dashboard" />
 
         <TouchableOpacity
           onPress={() => router.push('/profile')}
@@ -117,8 +137,13 @@ export default function ProjectInfo() {
         <View className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6 mb-8">
           <Text className="text-slate-500 font-mono text-[10px] mb-4 uppercase">Diagnostic_Report:</Text>
           <View className="gap-y-3">
-            <StatusRow 
-              label="BACKGROUND_KERNEL" 
+            <StatusRow
+              label="SERVER_LINK"
+              status={serverOnline === null ? 'CHECKING...' : serverOnline ? 'ONLINE' : 'OFFLINE'}
+              color={serverOnline === null ? 'bg-amber-500' : serverOnline ? 'bg-emerald-500' : 'bg-rose-500'}
+            />
+            <StatusRow
+              label="BACKGROUND_KERNEL"
               status={isServiceActive ? "ACTIVE_SERVICE" : "ERROR / STANDBY"} 
               color={isServiceActive ? "bg-cyan-500" : "bg-rose-500"} 
             />

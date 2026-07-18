@@ -41,6 +41,25 @@ export async function getApiBase(): Promise<string> {
   return BACKEND_URL.replace(/\/+$/, '');
 }
 
+// Лёгкая проверка доступности бэкенда для индикатора связи на главной.
+// Бьёт в корневой health-эндпоинт (`GET /` → {ok:true}), не в /api, без токена.
+// Возвращает false при таймауте, сетевой ошибке или ответе не от нашего сервера
+// (например заглушка-туннеля ngrok, где нет поля ok).
+export async function pingServer(timeoutMs = 6000): Promise<boolean> {
+  const base = await getApiBase();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}/`, { signal: ctrl.signal });
+    const data: any = await res.json().catch(() => null);
+    return res.ok && !!data?.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function getToken(): Promise<string | null> {
   return AsyncStorage.getItem(TOKEN_KEY);
 }

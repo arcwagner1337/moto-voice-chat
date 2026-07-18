@@ -106,8 +106,12 @@ JS/TS-правки доезжают до установленных release-пр
 - **Канал/ветка**: канал `production` (вшит в сборку) → ветка `production` в EAS.
   `eas.json` описывает профили и каналы. Публикация: `eas update --branch production`.
 - **Авто-публикация**: `eas-update.yml` гоняет `eas update` на каждый JS-push в `main`.
-  Секрет `EXPO_TOKEN` уже есть. Аккаунт EAS — `owner: 1mposs1bl3`,
+  Аккаунт EAS — `owner: 1mposs1bl3` (alexandr.bryaginya@gmail.com),
   `projectId b4c8eba9-d9ff-4978-a983-2c262c956a31`.
+- **Публиковать только с x86** (CI). `hermesc` в RN есть лишь под linux64/osx/win64;
+  на машине владельца (aarch64/Asahi) локальный `eas update`/`ota:direct` падает на
+  компиляции Hermes через FEX (`could not connect to muvm server`). Ручной вызов —
+  `bun run ota` = `gh workflow run eas-update.yml` (публикует на x86-раннере).
 - **Как применяется на телефоне**: по умолчанию (`checkAutomatically: ON_LOAD`)
   запуск N качает апдейт в фоне, запуск N+1 показывает. Кастомного `Updates.*`
   UI в коде нет.
@@ -116,10 +120,13 @@ JS/TS-правки доезжают до установленных release-пр
   разрешение) без бампа `version` = OTA с новым JS прилетит на старый бинарник и
   уронит его.** Меняешь нативное → подними `expo.version` (и делай `[RELEASE]`),
   чтобы runtimeVersion разошлись.
-- **Разовая настройка владельцем** (если канал ещё не создан): `eas login` под
-  `1mposs1bl3`, затем `eas channel:create production` (создаёт канал+ветку и
-  связывает их). Плюс поставить на телефон свежий `[RELEASE]`-APK с вшитым каналом —
-  только с него OTA и заработает.
+- **⚠️ ОТКРЫТЫЙ БЛОКЕР — `EXPO_TOKEN` от чужого аккаунта.** Текущий секрет ведёт на
+  аккаунт без доступа к проекту → `eas update` в CI падает с `Entity not authorized:
+  AppEntity[b4c8eba9…]`. Владельцу заменить: expo.dev (аккаунт `1mposs1bl3`) →
+  Settings → Access tokens → создать → `gh secret set EXPO_TOKEN`.
+- **Разовая настройка владельцем** (после фикса токена): `eas channel:create production`
+  (создаёт канал+ветку и связывает их) + поставить на телефон свежий `[RELEASE]`-APK
+  с вшитым каналом — только с него OTA и заработает.
 
 ## Критические инварианты (не ломать)
 

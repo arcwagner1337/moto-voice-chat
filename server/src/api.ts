@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import type { Response } from 'express';
-import { db, publicUser, getUserById, areFriends, isChatMember, friendIdsOf, PublicUser } from './db';
+import {
+  db, publicUser, getUserById, areFriends, isChatMember, friendIdsOf, PublicUser,
+  canSeeRoute, routeInfo, haversineMeters,
+} from './db';
 import { hashPassword, checkPassword, signToken, requireAuth, AuthedRequest } from './auth';
 import { isOnline, notifyUser, getLiveLocation, storeLocation } from './realtime';
 
@@ -439,23 +442,30 @@ function rideInfo(rideId: number) {
     finishedAt: ride.finished_at,
     creator,
     track,
-    leaderboard: members.map((m, idx) => ({
-      place: idx + 1,
-      user: {
-        id: m.user_id,
-        username: m.username,
-        displayName: m.display_name,
-        avatar: m.avatar,
-        online: isOnline(m.user_id),
-      },
-      distance: m.distance,
-      maxSpeed: m.max_speed,
-      avgSpeed: m.avg_speed,
-      duration: m.duration,
-      checkpoint: m.checkpoint,
-      updatedAt: m.updated_at,
-      location: getLiveLocation(m.user_id) || null,
-    })),
+    leaderboard: members.map((m, idx) => {
+      let path: { lat: number; lng: number }[] = [];
+      try {
+        if (m.path) path = JSON.parse(m.path);
+      } catch {}
+      return {
+        place: idx + 1,
+        user: {
+          id: m.user_id,
+          username: m.username,
+          displayName: m.display_name,
+          avatar: m.avatar,
+          online: isOnline(m.user_id),
+        },
+        distance: m.distance,
+        maxSpeed: m.max_speed,
+        avgSpeed: m.avg_speed,
+        duration: m.duration,
+        checkpoint: m.checkpoint,
+        updatedAt: m.updated_at,
+        path,
+        location: getLiveLocation(m.user_id) || null,
+      };
+    }),
   };
 }
 
@@ -622,6 +632,106 @@ api.delete('/rides/:id', requireAuth, (req, res) => {
   db.prepare('DELETE FROM ride_members WHERE ride_id = ?').run(rideId);
   db.prepare('DELETE FROM rides WHERE id = ?').run(rideId);
   for (const m of members) notifyUser(m.user_id, 'rides:update', {});
+  res.json({ ok: true });
+});
+
+// ---------- Маршруты (постоянные, в отличие от заездов) ----------
+
+const VISIBILITIES = ['private', 'friends', 'public'] as const;
+
+// Нормализация и валидация трека: [{lat,lng}], до 3000 точек.
+function cleanTrack(raw: any): { lat: number; lng: number }[] {
+  const arr = Array.isArray(raw) ? raw : [];
+  return arr
+    .slice(0, 3000)
+    .map((p: any) => ({ lat: Number(p?.lat), lng: Number(p?.lng) }))
+    .filter((p: any) => isFinite(p.lat) && isFinite(p.lng));
+}
+
+function trackDistance(points: { lat: number; lng: number }[]): number {
+  let d = 0;
+  for (let i = 1; i < points.length; i++) {
+    const seg = haversineMeters(points[i - 1], points[i]);
+    if (seg < 500) d += seg; // отсекаем телепорты
+  }
+  return Math.round(d);
+}
+
+// Сохранить записанный маршрут
+api.post('/routes', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Введите название маршрута' });
+  const track = cleanTrack(req.body?.points);
+  if (track.length < 2) return res.status(400).json({ error: 'В маршруте слишком мало точек' });
+  const visibility = VISIBILITIES.includes(req.body?.visibility) ? req.body.visibility : 'private';
+  const result = db
+    .prepare(
+      `INSERT INTO routes (user_id, name, track, distance, visibility, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(userId, name.slice(0, 40), JSON.stringify(track), trackDistance(track), visibility, now());
+  const route: any = db.prepare('SELECT * FROM routes WHERE id = ?').get(Number(result.lastInsertRowid));
+  // Друзьям, которым маршрут виден, — обновить список
+  if (visibility !== 'private') {
+    for (const fid of friendIdsOf(userId)) notifyUser(fid, 'routes:update', {});
+  }
+  res.json({ route: routeInfo(route, userId) });
+});
+
+// Список маршрутов: мои + видимые чужие (публичные + друзей с visibility friends)
+api.get('/routes', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const friends = friendIdsOf(userId);
+  const mineRows: any[] = db
+    .prepare('SELECT * FROM routes WHERE user_id = ? ORDER BY id DESC LIMIT 100')
+    .all(userId);
+  const fPlace = friends.length ? friends.map(() => '?').join(',') : 'NULL';
+  const sharedRows: any[] = db
+    .prepare(
+      `SELECT * FROM routes
+       WHERE user_id != ?
+         AND (visibility = 'public' OR (visibility = 'friends' AND user_id IN (${fPlace})))
+       ORDER BY id DESC LIMIT 100`
+    )
+    .all(userId, ...friends);
+  res.json({
+    mine: mineRows.map((r) => routeInfo(r, userId)),
+    shared: sharedRows.map((r) => routeInfo(r, userId)),
+  });
+});
+
+api.get('/routes/:id', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const route: any = db.prepare('SELECT * FROM routes WHERE id = ?').get(Number(req.params.id));
+  if (!route) return res.status(404).json({ error: 'Маршрут не найден' });
+  if (!canSeeRoute(route, userId)) return res.status(403).json({ error: 'Нет доступа' });
+  res.json({ route: routeInfo(route, userId) });
+});
+
+// Сменить видимость (поделиться со всеми / с друзьями / скрыть) — только владелец
+api.post('/routes/:id/visibility', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const route: any = db.prepare('SELECT * FROM routes WHERE id = ?').get(Number(req.params.id));
+  if (!route) return res.status(404).json({ error: 'Маршрут не найден' });
+  if (route.user_id !== userId) return res.status(403).json({ error: 'Только владелец' });
+  const visibility = VISIBILITIES.includes(req.body?.visibility) ? req.body.visibility : null;
+  if (!visibility) return res.status(400).json({ error: 'Неверная видимость' });
+  db.prepare('UPDATE routes SET visibility = ? WHERE id = ?').run(visibility, route.id);
+  for (const fid of friendIdsOf(userId)) notifyUser(fid, 'routes:update', {});
+  const fresh: any = db.prepare('SELECT * FROM routes WHERE id = ?').get(route.id);
+  res.json({ route: routeInfo(fresh, userId) });
+});
+
+api.delete('/routes/:id', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const route: any = db.prepare('SELECT * FROM routes WHERE id = ?').get(Number(req.params.id));
+  if (!route) return res.status(404).json({ error: 'Маршрут не найден' });
+  if (route.user_id !== userId) return res.status(403).json({ error: 'Только владелец' });
+  db.prepare('DELETE FROM routes WHERE id = ?').run(route.id);
+  if (route.visibility !== 'private') {
+    for (const fid of friendIdsOf(userId)) notifyUser(fid, 'routes:update', {});
+  }
   res.json({ ok: true });
 });
 

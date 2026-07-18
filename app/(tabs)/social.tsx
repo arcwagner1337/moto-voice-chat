@@ -9,6 +9,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../../components/ScreenHeader';
@@ -52,8 +53,10 @@ export default function SocialScreen() {
   const [searchResults, setSearchResults] = useState<SocialUser[]>([]);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
+    setLoading(true);
     try {
       const data = await getFriends();
       setFriendsData(data);
@@ -61,6 +64,8 @@ export default function SocialScreen() {
       // Токен протух — request() сам чистит сессию
       const saved = await getSavedUser();
       if (!saved) setUser(null);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -393,7 +398,12 @@ export default function SocialScreen() {
                 <Text className="text-slate-500 text-[10px] uppercase mb-3 font-bold">
                   Друзья · {friendsData.friends.length}
                 </Text>
-                {friendsData.friends.length === 0 && (
+                {loading && friendsData.friends.length === 0 && (
+                  <View className="items-center py-6">
+                    <ActivityIndicator color="#22d3ee" />
+                  </View>
+                )}
+                {!loading && friendsData.friends.length === 0 && (
                   <Text className="text-slate-600 text-xs">
                     Пока никого — найдите друзей через поиск выше
                   </Text>

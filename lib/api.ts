@@ -218,7 +218,22 @@ export type LeaderboardEntry = {
   duration: number; // секунды
   checkpoint: number;
   updatedAt: number;
+  path: TrackPoint[]; // реально пройденный трек участника (цветная полоска)
   location: { lat: number; lng: number; speed: number; updatedAt: number } | null;
+};
+
+export type RouteVisibility = 'private' | 'friends' | 'public';
+
+// Постоянный маршрут (сохранённый трек «как я проехал»), не заезд-соревнование
+export type RouteInfo = {
+  id: number;
+  name: string;
+  distance: number; // метры
+  visibility: RouteVisibility;
+  createdAt: number;
+  owner: SocialUser;
+  mine: boolean;
+  track: TrackPoint[];
 };
 
 export type RideInfo = {
@@ -267,6 +282,29 @@ export const setRideTrack = (rideId: number, points: TrackPoint[]) =>
     method: 'POST',
     body: { points },
   }).then((d) => d.ride);
+
+// ---------- Маршруты ----------
+
+export const createRoute = (name: string, points: TrackPoint[], visibility: RouteVisibility) =>
+  request<{ route: RouteInfo }>('/routes', {
+    method: 'POST',
+    body: { name, points, visibility },
+  }).then((d) => d.route);
+
+export const getRoutes = () =>
+  request<{ mine: RouteInfo[]; shared: RouteInfo[] }>('/routes');
+
+export const getRoute = (routeId: number) =>
+  request<{ route: RouteInfo }>(`/routes/${routeId}`).then((d) => d.route);
+
+export const setRouteVisibility = (routeId: number, visibility: RouteVisibility) =>
+  request<{ route: RouteInfo }>(`/routes/${routeId}/visibility`, {
+    method: 'POST',
+    body: { visibility },
+  }).then((d) => d.route);
+
+export const deleteRoute = (routeId: number) =>
+  request(`/routes/${routeId}`, { method: 'DELETE' });
 
 // Обновить имя/аватар аккаунта (вызывается при сохранении вкладки PROFILE)
 export const updateMe = async (displayName: string, avatar: string) => {

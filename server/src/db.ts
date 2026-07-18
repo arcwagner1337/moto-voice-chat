@@ -74,13 +74,28 @@ CREATE TABLE IF NOT EXISTS ride_members (
   last_lat   REAL,
   last_lng   REAL,
   last_ts    INTEGER,
+  path       TEXT,
   updated_at INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (ride_id, user_id)
+);
+
+-- Постоянные маршруты пользователя (в отличие от заездов — не соревнование,
+-- а сохранённый трек: «как я проехал»). visibility: private | friends | public.
+CREATE TABLE IF NOT EXISTS routes (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  name       TEXT    NOT NULL,
+  track      TEXT    NOT NULL,
+  distance   REAL    NOT NULL DEFAULT 0,
+  visibility TEXT    NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','friends','public')),
+  created_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_friendships_to ON friendships(to_id, status);
 CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status);
+CREATE INDEX IF NOT EXISTS idx_routes_user ON routes(user_id);
+CREATE INDEX IF NOT EXISTS idx_routes_visibility ON routes(visibility);
 `);
 
 // Миграции для баз, созданных до появления новых колонок
@@ -91,6 +106,7 @@ const migrations = [
   'ALTER TABLE ride_members ADD COLUMN last_lat REAL',
   'ALTER TABLE ride_members ADD COLUMN last_lng REAL',
   'ALTER TABLE ride_members ADD COLUMN last_ts INTEGER',
+  'ALTER TABLE ride_members ADD COLUMN path TEXT',
 ];
 for (const m of migrations) {
   try {
@@ -136,6 +152,19 @@ export function accumulateRideStats(userId: number, lat: number, lng: number, sp
       if (d > 1 && d < 500) distance += d;
     }
 
+    // Реально пройденный трек участника (для отрисовки цветной линии на карте).
+    // Прореживаем: точку добавляем, если сдвинулись >8м от последней сохранённой,
+    // и ограничиваем ~2000 точек (при переполнении отбрасываем самые старые).
+    let path: { lat: number; lng: number }[] = [];
+    try {
+      if (m.path) path = JSON.parse(m.path);
+    } catch {}
+    const tail = path[path.length - 1];
+    if (!tail || haversineMeters(tail, { lat, lng }) > 8) {
+      path.push({ lat, lng });
+      if (path.length > 2000) path.splice(0, path.length - 2000);
+    }
+
     // Прогресс по трассе: чекпоинт засчитывается в радиусе 60 метров
     if (m.track) {
       try {
@@ -156,11 +185,11 @@ export function accumulateRideStats(userId: number, lat: number, lng: number, sp
     db.prepare(
       `UPDATE ride_members
        SET distance = ?, max_speed = ?, avg_speed = ?, duration = ?, checkpoint = ?,
-           last_lat = ?, last_lng = ?, last_ts = ?, updated_at = ?
+           last_lat = ?, last_lng = ?, last_ts = ?, path = ?, updated_at = ?
        WHERE ride_id = ? AND user_id = ?`
     ).run(
       distance, maxSpeed, Math.round(avgSpeed * 10) / 10, duration, checkpoint,
-      lat, lng, nowTs, nowTs, m.ride_id, userId
+      lat, lng, nowTs, JSON.stringify(path), nowTs, m.ride_id, userId
     );
   }
 }
@@ -214,4 +243,34 @@ export function friendIdsOf(userId: number): number[] {
     )
     .all(userId, userId, userId);
   return rows.map((r) => r.fid as number);
+}
+
+// ---------- Маршруты ----------
+
+// Маршрут виден: владельцу всегда; публичный — всем; friends — только друзьям.
+export function canSeeRoute(route: any, userId: number): boolean {
+  if (!route) return false;
+  if (route.user_id === userId) return true;
+  if (route.visibility === 'public') return true;
+  if (route.visibility === 'friends') return areFriends(route.user_id, userId);
+  return false;
+}
+
+// Формат маршрута для клиента. viewerId — чтобы проставить mine.
+export function routeInfo(route: any, viewerId: number) {
+  if (!route) return null;
+  let track: { lat: number; lng: number }[] = [];
+  try {
+    track = JSON.parse(route.track);
+  } catch {}
+  return {
+    id: route.id as number,
+    name: route.name as string,
+    distance: route.distance as number,
+    visibility: route.visibility as 'private' | 'friends' | 'public',
+    createdAt: route.created_at as number,
+    owner: getUserById(route.user_id),
+    mine: route.user_id === viewerId,
+    track,
+  };
 }

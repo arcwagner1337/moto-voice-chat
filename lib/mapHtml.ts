@@ -83,6 +83,48 @@ export const MAP_HTML = `<!DOCTYPE html>
     g.addTo(map);
   }
 
+  // Цветные полоски реально пройденного пути каждого участника заезда.
+  // list: [{ id, color, points:[{lat,lng}] }]
+  var rideTracksLayer = null;
+  function setRideTracks(list) {
+    if (rideTracksLayer) { map.removeLayer(rideTracksLayer); rideTracksLayer = null; }
+    if (!list || !list.length) return;
+    var g = L.layerGroup();
+    list.forEach(function (t) {
+      if (!t.points || t.points.length < 2) return;
+      var latlngs = t.points.map(function (p) { return [p.lat, p.lng]; });
+      // обводка для контраста на тёмной карте + сама цветная линия
+      g.addLayer(L.polyline(latlngs, { color: '#020617', weight: 6, opacity: 0.5 }));
+      g.addLayer(L.polyline(latlngs, { color: t.color || '#22d3ee', weight: 3, opacity: 0.95 }));
+    });
+    rideTracksLayer = g;
+    g.addTo(map);
+  }
+
+  // Просмотр/запись одного маршрута: линия + метки старт/финиш.
+  // fit=true — подогнать карту под маршрут.
+  var routeLayer = null;
+  function setRoute(points, color, fit) {
+    if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+    if (!points || !points.length) return;
+    var g = L.layerGroup();
+    var latlngs = points.map(function (p) { return [p.lat, p.lng]; });
+    if (latlngs.length > 1) {
+      g.addLayer(L.polyline(latlngs, { color: '#020617', weight: 7, opacity: 0.5 }));
+      g.addLayer(L.polyline(latlngs, { color: color || '#a78bfa', weight: 4, opacity: 0.95 }));
+    }
+    var mk = function (ll, c, ch) {
+      return L.marker(ll, { icon: L.divIcon({
+        html: '<div class="cp" style="background:' + c + ';border-color:#020617">' + ch + '</div>',
+        className: '', iconSize: null }) });
+    };
+    g.addLayer(mk(latlngs[0], '#22c55e', 'A'));
+    if (latlngs.length > 1) g.addLayer(mk(latlngs[latlngs.length - 1], '#ef4444', 'B'));
+    routeLayer = g;
+    g.addTo(map);
+    if (fit && latlngs.length > 1) map.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] });
+  }
+
   // Режим разметки: тапы по карте уходят в приложение
   var tapMode = false;
   function setTapMode(on) { tapMode = on; }
@@ -95,6 +137,8 @@ export const MAP_HTML = `<!DOCTYPE html>
   window.updateMarkers = updateMarkers;
   window.centerOn = centerOn;
   window.setTrack = setTrack;
+  window.setRideTracks = setRideTracks;
+  window.setRoute = setRoute;
   window.setTapMode = setTapMode;
 </script>
 </body>

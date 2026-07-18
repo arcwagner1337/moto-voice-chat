@@ -1,6 +1,6 @@
 import { Stack, useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -9,6 +9,8 @@ import ScreenHeader from '../../components/ScreenHeader';
 import {
   SocialUser,
   RideInfo,
+  RouteInfo,
+  RouteVisibility,
   TrackPoint,
   getSavedUser,
   getFriendLocations,
@@ -20,6 +22,10 @@ import {
   finishRide,
   deleteRide,
   setRideTrack,
+  getRoutes,
+  createRoute,
+  setRouteVisibility,
+  deleteRoute,
 } from '../../lib/api';
 import { getSocialSocket } from '../../lib/socialSocket';
 import { useLiveLocation, GeoPoint } from '../../lib/useLiveLocation';
@@ -32,6 +38,27 @@ import { MAP_HTML } from '../../lib/mapHtml';
 
 // Трансляция позиции включается сама; флаг хранит явный отказ пользователя
 const SHARING_OFF_KEY = '@map_sharing_off';
+
+// Палитра для цветных полосок участников заезда — стабильный цвет по id
+const TRACK_COLORS = ['#22d3ee', '#f472b6', '#a3e635', '#fbbf24', '#a78bfa', '#fb7185', '#34d399', '#60a5fa'];
+const colorForUser = (id: number) => TRACK_COLORS[Math.abs(id) % TRACK_COLORS.length];
+
+// Минимальный сдвиг между точками записи маршрута (прореживание), метры
+const REC_MIN_METERS = 12;
+function metersBetween(a: TrackPoint, b: TrackPoint): number {
+  const R = 6371000;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+const VIS_LABEL: Record<RouteVisibility, string> = {
+  private: '🔒 Только я',
+  friends: '👥 Друзьям',
+  public: '🌍 Всем',
+};
 
 type MarkerData = {
   id: string;
@@ -55,12 +82,32 @@ export default function MapScreen() {
   const [myPos, setMyPos] = useState<GeoPoint | null>(null);
   const friendMarkers = useRef<{ [id: number]: MarkerData }>({});
 
+  // Режим вкладки: соревновательные заезды или постоянные маршруты
+  const [mapMode, setMapMode] = useState<'rides' | 'routes'>('rides');
+
   // Заезды
   const [rides, setRides] = useState<RideInfo[]>([]);
   const [history, setHistory] = useState<RideInfo[]>([]);
   const [openHistoryId, setOpenHistoryId] = useState<number | null>(null);
   const [activeRide, setActiveRide] = useState<RideInfo | null>(null);
   const [rideName, setRideName] = useState('');
+  const [ridesLoading, setRidesLoading] = useState(false);
+
+  // Маршруты
+  const [myRoutes, setMyRoutes] = useState<RouteInfo[]>([]);
+  const [sharedRoutes, setSharedRoutes] = useState<RouteInfo[]>([]);
+  const [routesLoading, setRoutesLoading] = useState(false);
+  const [viewingRouteId, setViewingRouteId] = useState<number | null>(null);
+
+  // Запись маршрута
+  const [recording, setRecording] = useState(false);
+  const recordingRef = useRef(false);
+  const recordedRef = useRef<TrackPoint[]>([]);
+  const [recordCount, setRecordCount] = useState(0);
+  const [pendingRoute, setPendingRoute] = useState<TrackPoint[] | null>(null); // записан, ждём сохранения
+  const [routeName, setRouteName] = useState('');
+  const [routeVis, setRouteVis] = useState<RouteVisibility>('private');
+  const [savingRoute, setSavingRoute] = useState(false);
 
   // Разметка трассы (только организатор)
   const [editingTrack, setEditingTrack] = useState(false);
@@ -128,6 +175,52 @@ export default function MapScreen() {
     pushTrack();
   }, [pushTrack, activeRide, editingTrack]);
 
+  // Цветные полоски реально пройденного пути каждого участника активного заезда
+  const pushRideTracks = useCallback(() => {
+    const ride = activeRideRef.current;
+    const list =
+      mapMode === 'rides' && ride
+        ? ride.leaderboard
+            .filter((e) => e.path && e.path.length > 1)
+            .map((e) => ({ id: String(e.user.id), color: colorForUser(e.user.id), points: e.path }))
+        : [];
+    webRef.current?.injectJavaScript(
+      `window.setRideTracks && window.setRideTracks(${JSON.stringify(list)}); true;`
+    );
+  }, [mapMode]);
+
+  useEffect(() => {
+    pushRideTracks();
+  }, [pushRideTracks, activeRide]);
+
+  // Одиночный маршрут на карте: во время записи (оранжевый), предпросмотр
+  // записанного (фиолетовый) или просмотр сохранённого/чужого.
+  const pushRoute = useCallback(
+    (points: TrackPoint[], color: string, fit: boolean) => {
+      webRef.current?.injectJavaScript(
+        `window.setRoute && window.setRoute(${JSON.stringify(points)}, ${JSON.stringify(color)}, ${fit}); true;`
+      );
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (mapMode !== 'routes') {
+      pushRoute([], '#a78bfa', false);
+      return;
+    }
+    if (recording) {
+      pushRoute(recordedRef.current, '#f59e0b', false);
+    } else if (pendingRoute) {
+      pushRoute(pendingRoute, '#a78bfa', true);
+    } else if (viewingRouteId != null) {
+      const r = [...myRoutes, ...sharedRoutes].find((x) => x.id === viewingRouteId);
+      pushRoute(r ? r.track : [], r ? colorForUser(r.owner.id) : '#a78bfa', true);
+    } else {
+      pushRoute([], '#a78bfa', false);
+    }
+  }, [mapMode, recording, recordCount, pendingRoute, viewingRouteId, myRoutes, sharedRoutes, pushRoute]);
+
   const onWebViewMessage = (event: any) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
@@ -159,9 +252,20 @@ export default function MapScreen() {
 
   const onPoint = useCallback((p: GeoPoint) => {
     setMyPos(p);
+    // Во время записи маршрута — накапливаем прореженный трек
+    if (recordingRef.current) {
+      const pt = { lat: p.lat, lng: p.lng };
+      const arr = recordedRef.current;
+      const last = arr[arr.length - 1];
+      if (!last || metersBetween(last, pt) >= REC_MIN_METERS) {
+        arr.push(pt);
+        setRecordCount(arr.length);
+      }
+    }
   }, []);
 
-  useLiveLocation(sharing, onPoint);
+  // GPS нужен и для записи маршрута, даже если трансляция позиции выключена
+  useLiveLocation(sharing || recording, onPoint);
 
   // Обновление заезда каждые 5 секунд (статистику считает сервер)
   useEffect(() => {
@@ -193,12 +297,24 @@ export default function MapScreen() {
   const refreshRides = useCallback(async () => {
     // Независимо: падение истории (например старый сервер без /rides/history)
     // не должно ломать обновление списка активных заездов
-    getActiveRides()
-      .then(setRides)
-      .catch(() => {});
-    getRideHistory()
-      .then(setHistory)
-      .catch(() => {});
+    setRidesLoading(true);
+    Promise.allSettled([
+      getActiveRides().then(setRides),
+      getRideHistory().then(setHistory),
+    ]).finally(() => setRidesLoading(false));
+  }, []);
+
+  const refreshRoutes = useCallback(async () => {
+    setRoutesLoading(true);
+    try {
+      const d = await getRoutes();
+      setMyRoutes(d.mine);
+      setSharedRoutes(d.shared);
+    } catch {
+      // сеть недоступна — оставляем что было
+    } finally {
+      setRoutesLoading(false);
+    }
   }, []);
 
   useFocusEffect(
@@ -226,6 +342,7 @@ export default function MapScreen() {
         const cur = activeRideRef.current;
         if (cur) getRide(cur.id).then(setActiveRide).catch(() => {});
       };
+      const onRoutesUpdate = () => refreshRoutes();
 
       (async () => {
         const saved = await getSavedUser();
@@ -237,11 +354,13 @@ export default function MapScreen() {
         if (saved) {
           refreshFriendLocations();
           refreshRides();
+          refreshRoutes();
           sock = await getSocialSocket();
           if (sock && active) {
             sock.on('loc:friend', onFriendLoc);
             sock.on('loc:friend-stop', onFriendStop);
             sock.on('rides:update', onRidesUpdate);
+            sock.on('routes:update', onRoutesUpdate);
           }
         }
       })();
@@ -252,9 +371,10 @@ export default function MapScreen() {
           sock.off('loc:friend', onFriendLoc);
           sock.off('loc:friend-stop', onFriendStop);
           sock.off('rides:update', onRidesUpdate);
+          sock.off('routes:update', onRoutesUpdate);
         }
       };
-    }, [pushMarkers, refreshFriendLocations, refreshRides])
+    }, [pushMarkers, refreshFriendLocations, refreshRides, refreshRoutes])
   );
 
   // ---------- Действия ----------
@@ -378,6 +498,86 @@ export default function MapScreen() {
     }
   };
 
+  // ---------- Маршруты ----------
+
+  const startRecording = () => {
+    recordedRef.current = [];
+    setRecordCount(0);
+    setPendingRoute(null);
+    setViewingRouteId(null);
+    recordingRef.current = true;
+    setRecording(true);
+    setSharing(true); // нужен GPS
+  };
+
+  const stopRecording = () => {
+    recordingRef.current = false;
+    setRecording(false);
+    const pts = recordedRef.current;
+    if (pts.length < 2) {
+      Alert.alert('Маршрут не записан', 'Слишком мало точек — нужно немного проехать с включённым GPS.');
+      recordedRef.current = [];
+      setRecordCount(0);
+      return;
+    }
+    setPendingRoute([...pts]);
+    setRouteName('');
+    setRouteVis('private');
+  };
+
+  const saveRoute = async () => {
+    if (!pendingRoute) return;
+    const name = routeName.trim();
+    if (!name) return Alert.alert('Ошибка', 'Введите название маршрута');
+    setSavingRoute(true);
+    try {
+      await createRoute(name, pendingRoute, routeVis);
+      setPendingRoute(null);
+      setRouteName('');
+      recordedRef.current = [];
+      setRecordCount(0);
+      refreshRoutes();
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    } finally {
+      setSavingRoute(false);
+    }
+  };
+
+  const discardRoute = () => {
+    setPendingRoute(null);
+    recordedRef.current = [];
+    setRecordCount(0);
+  };
+
+  const changeVisibility = async (r: RouteInfo, visibility: RouteVisibility) => {
+    try {
+      await setRouteVisibility(r.id, visibility);
+      refreshRoutes();
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    }
+  };
+
+  const removeRoute = (r: RouteInfo) => {
+    Alert.alert('Удалить маршрут?', `«${r.name}» удалится безвозвратно`, [
+      { text: 'Отмена', style: 'cancel' },
+      {
+        text: 'Удалить',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteRoute(r.id);
+            if (viewingRouteId === r.id) setViewingRouteId(null);
+            refreshRoutes();
+          } catch (e) {
+            Alert.alert('Ошибка', (e as Error).message);
+          }
+        },
+      },
+    ]);
+  };
+
   const fmtDist = (m: number) => (m < 1000 ? `${Math.round(m)} м` : `${(m / 1000).toFixed(1)} км`);
   const fmtDur = (sec: number) => {
     const h = Math.floor(sec / 3600);
@@ -454,6 +654,28 @@ export default function MapScreen() {
             )}
           </View>
 
+          {/* Переключатель: заезды / маршруты */}
+          {!fullMap && (
+          <View className="mx-5 mt-3 flex-row bg-slate-900 border border-slate-800 rounded-2xl p-1">
+            <TouchableOpacity
+              onPress={() => setMapMode('rides')}
+              className={`flex-1 py-2 rounded-xl items-center ${mapMode === 'rides' ? 'bg-cyan-600' : ''}`}
+            >
+              <Text className={`font-bold text-[11px] uppercase ${mapMode === 'rides' ? 'text-white' : 'text-slate-400'}`}>
+                🏁 Заезды
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setMapMode('routes')}
+              className={`flex-1 py-2 rounded-xl items-center ${mapMode === 'routes' ? 'bg-violet-600' : ''}`}
+            >
+              <Text className={`font-bold text-[11px] uppercase ${mapMode === 'routes' ? 'text-white' : 'text-slate-400'}`}>
+                🛣 Маршруты
+              </Text>
+            </TouchableOpacity>
+          </View>
+          )}
+
           {/* Тумблеры трансляции */}
           {!fullMap && (
           <View className="mx-5 mt-3 flex-row gap-2">
@@ -486,6 +708,8 @@ export default function MapScreen() {
             contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
             showsVerticalScrollIndicator={false}
           >
+            {mapMode === 'rides' ? (
+            <>
             {activeRide ? (
               <View className={`p-4 bg-slate-900 rounded-3xl border ${hasTrack ? 'border-violet-500/40' : 'border-cyan-500/40'}`}>
                 <View className="flex-row justify-between items-center mb-3">
@@ -592,6 +816,7 @@ export default function MapScreen() {
                     <Text className="text-slate-500 font-mono font-bold w-7">
                       {e.place === 1 ? '🥇' : e.place === 2 ? '🥈' : e.place === 3 ? '🥉' : `${e.place}.`}
                     </Text>
+                    <View style={{ width: 4, height: 26, borderRadius: 2, backgroundColor: colorForUser(e.user.id), marginRight: 8 }} />
                     <Text className="text-xl mr-2">{e.user.avatar}</Text>
                     <View className="flex-1">
                       <Text className="text-white font-bold text-sm" numberOfLines={1}>
@@ -771,10 +996,189 @@ export default function MapScreen() {
                 )}
               </>
             )}
+            {ridesLoading && !activeRide && rides.length === 0 && history.length === 0 && (
+              <View className="items-center py-10">
+                <ActivityIndicator color="#22d3ee" />
+                <Text className="text-slate-500 text-[10px] mt-3 uppercase">Загрузка заездов…</Text>
+              </View>
+            )}
+            </>
+            ) : (
+            <>
+              {/* Запись маршрута */}
+              <View className="p-4 bg-slate-900 rounded-3xl border border-violet-500/30 mb-3">
+                <Text className="text-violet-400 font-bold uppercase mb-2 text-[10px] tracking-widest">
+                  Запись маршрута
+                </Text>
+                {pendingRoute ? (
+                  <>
+                    <Text className="text-white text-sm mb-2">
+                      Записано {pendingRoute.length} точек. Сохранить маршрут?
+                    </Text>
+                    <TextInput
+                      placeholder="Название (например: Эндуро круг у озера)"
+                      placeholderTextColor="#475569"
+                      className="text-white bg-slate-950 p-3 rounded-xl border border-slate-800 mb-2"
+                      value={routeName}
+                      onChangeText={setRouteName}
+                    />
+                    <View className="flex-row gap-2 mb-2">
+                      {(['private', 'friends', 'public'] as RouteVisibility[]).map((v) => (
+                        <TouchableOpacity
+                          key={v}
+                          onPress={() => setRouteVis(v)}
+                          className={`flex-1 py-2 rounded-xl border items-center ${
+                            routeVis === v ? 'bg-violet-500/20 border-violet-500/60' : 'bg-slate-950 border-slate-800'
+                          }`}
+                        >
+                          <Text className={`text-[9px] font-bold ${routeVis === v ? 'text-violet-300' : 'text-slate-500'}`}>
+                            {VIS_LABEL[v]}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <View className="flex-row gap-2">
+                      <TouchableOpacity
+                        onPress={saveRoute}
+                        disabled={savingRoute}
+                        className="flex-1 p-3 rounded-2xl bg-violet-600 items-center justify-center flex-row"
+                      >
+                        {savingRoute && <ActivityIndicator color="#fff" size="small" style={{ marginRight: 8 }} />}
+                        <Text className="text-white font-bold text-[11px] uppercase">Сохранить</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={discardRoute}
+                        className="p-3 px-4 rounded-2xl border border-slate-700 bg-slate-800 items-center justify-center"
+                      >
+                        <Text className="text-slate-300 font-bold text-[11px] uppercase">Отмена</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                ) : recording ? (
+                  <>
+                    <Text className="text-white text-sm mb-2">🔴 Идёт запись… точек: {recordCount}</Text>
+                    <TouchableOpacity onPress={stopRecording} className="p-3 rounded-2xl bg-red-600 items-center">
+                      <Text className="text-white font-bold text-[11px] uppercase">■ Остановить и сохранить</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <TouchableOpacity onPress={startRecording} className="p-3 rounded-2xl bg-violet-600 items-center">
+                      <Text className="text-white font-bold text-[11px] uppercase">● Записать новый маршрут</Text>
+                    </TouchableOpacity>
+                    <Text className="text-slate-500 text-[10px] mt-2 leading-4">
+                      Едьте по маршруту с включённым GPS — приложение запишет трек. Потом сохраните и при
+                      желании поделитесь со всеми или с друзьями.
+                    </Text>
+                  </>
+                )}
+              </View>
+
+              {/* Мои маршруты */}
+              <View className="p-4 bg-slate-900 rounded-3xl border border-slate-800 mb-3">
+                <Text className="text-slate-500 text-[10px] uppercase font-bold mb-2">Мои маршруты</Text>
+                {routesLoading && myRoutes.length === 0 ? (
+                  <View className="items-center py-6">
+                    <ActivityIndicator color="#a78bfa" />
+                  </View>
+                ) : myRoutes.length === 0 ? (
+                  <Text className="text-slate-600 text-xs">Пока пусто. Запишите первый маршрут выше.</Text>
+                ) : (
+                  myRoutes.map((r) => (
+                    <RouteRow
+                      key={r.id}
+                      route={r}
+                      active={viewingRouteId === r.id}
+                      distanceLabel={fmtDist(r.distance)}
+                      onToggle={() => setViewingRouteId((p) => (p === r.id ? null : r.id))}
+                      onCycleVis={() => {
+                        const order: RouteVisibility[] = ['private', 'friends', 'public'];
+                        changeVisibility(r, order[(order.indexOf(r.visibility) + 1) % 3]);
+                      }}
+                      onDelete={() => removeRoute(r)}
+                    />
+                  ))
+                )}
+              </View>
+
+              {/* Маршруты друзей и общие */}
+              {(sharedRoutes.length > 0 || routesLoading) && (
+                <View className="p-4 bg-slate-900 rounded-3xl border border-slate-800">
+                  <Text className="text-slate-500 text-[10px] uppercase font-bold mb-2">
+                    Маршруты друзей и общие
+                  </Text>
+                  {routesLoading && sharedRoutes.length === 0 ? (
+                    <View className="items-center py-6">
+                      <ActivityIndicator color="#a78bfa" />
+                    </View>
+                  ) : (
+                    sharedRoutes.map((r) => (
+                      <RouteRow
+                        key={r.id}
+                        route={r}
+                        active={viewingRouteId === r.id}
+                        distanceLabel={fmtDist(r.distance)}
+                        onToggle={() => setViewingRouteId((p) => (p === r.id ? null : r.id))}
+                      />
+                    ))
+                  )}
+                </View>
+              )}
+            </>
+            )}
           </ScrollView>
           )}
         </>
       )}
+    </View>
+  );
+}
+
+function RouteRow({
+  route,
+  active,
+  distanceLabel,
+  onToggle,
+  onCycleVis,
+  onDelete,
+}: {
+  route: RouteInfo;
+  active: boolean;
+  distanceLabel: string;
+  onToggle: () => void;
+  onCycleVis?: () => void;
+  onDelete?: () => void;
+}) {
+  return (
+    <View
+      className={`rounded-2xl border mb-1.5 ${
+        active ? 'border-violet-500/60 bg-violet-500/5' : 'border-slate-800 bg-slate-950'
+      }`}
+    >
+      <View className="flex-row items-center p-3">
+        <TouchableOpacity onPress={onToggle} className="flex-1 mr-2">
+          <Text className="text-white font-bold" numberOfLines={1}>
+            {active ? '👁 ' : '🛣 '}
+            {route.name}
+          </Text>
+          <Text className="text-slate-500 font-mono text-[10px]" numberOfLines={1}>
+            {route.owner?.avatar} {route.owner?.displayName} · {distanceLabel} · {route.track.length} тчк
+          </Text>
+        </TouchableOpacity>
+        {onCycleVis && (
+          <TouchableOpacity
+            onPress={onCycleVis}
+            className="px-2 py-1 rounded-lg bg-slate-800 border border-slate-700 mr-2"
+          >
+            <Text className="text-[9px] text-slate-300 font-bold">{VIS_LABEL[route.visibility]}</Text>
+          </TouchableOpacity>
+        )}
+        {onDelete && (
+          <TouchableOpacity onPress={onDelete} className="px-3 py-2 rounded-xl bg-slate-900 border border-red-500/30">
+            <Text className="text-[12px]">🗑</Text>
+          </TouchableOpacity>
+        )}
+      </View>
     </View>
   );
 }

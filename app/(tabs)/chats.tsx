@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../../components/ScreenHeader';
@@ -25,6 +26,7 @@ export default function ChatsScreen() {
   const [user, setUser] = useState<SocialUser | null>(null);
   const [checked, setChecked] = useState(false);
   const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [loading, setLoading] = useState(false);
 
   // Создание группы
   const [creating, setCreating] = useState(false);
@@ -34,12 +36,15 @@ export default function ChatsScreen() {
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
+    setLoading(true);
     try {
       setChats(await getChats());
     } catch {
       // сервер недоступен или сессия сброшена — показываем что есть
       const saved = await getSavedUser();
       if (!saved) setUser(null);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -187,7 +192,14 @@ export default function ChatsScreen() {
               </View>
             )}
 
-            {chats.length === 0 && !creating && (
+            {loading && chats.length === 0 && !creating && (
+              <View className="items-center py-10">
+                <ActivityIndicator color="#22d3ee" />
+                <Text className="text-slate-500 text-[10px] mt-3 uppercase">Загрузка чатов…</Text>
+              </View>
+            )}
+
+            {!loading && chats.length === 0 && !creating && (
               <View className="p-6 bg-slate-900/50 rounded-3xl border border-slate-800">
                 <Text className="text-slate-500 text-xs">
                   Пока пусто. Напишите другу со вкладки FRIENDS (кнопка 💬) или создайте группу.

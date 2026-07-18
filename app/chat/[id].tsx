@@ -8,6 +8,7 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import {
   ChatMessage,
@@ -34,6 +35,7 @@ export default function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(true);
   const flatListRef = useRef<any>(null);
 
   // Добавление друзей в группу
@@ -94,6 +96,7 @@ export default function ChatScreen() {
         if (!active) return;
         setChat(info);
         setMessages(msgs);
+        setLoading(false);
         if (msgs.length > 0) markChatRead(chatId, msgs[msgs.length - 1].id);
       } catch (e) {
         Alert.alert('Ошибка', (e as Error).message);
@@ -212,7 +215,19 @@ export default function ChatScreen() {
           data={messages}
           keyExtractor={(item) => String(item.id)}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
-          contentContainerStyle={{ paddingVertical: 12 }}
+          contentContainerStyle={{ paddingVertical: 12, flexGrow: 1 }}
+          ListEmptyComponent={
+            loading ? (
+              <View className="flex-1 items-center justify-center py-16">
+                <ActivityIndicator color="#22d3ee" />
+                <Text className="text-slate-500 text-[10px] mt-3 uppercase">Загрузка сообщений…</Text>
+              </View>
+            ) : (
+              <View className="flex-1 items-center justify-center py-16">
+                <Text className="text-slate-600 text-xs">Сообщений пока нет — напишите первым</Text>
+              </View>
+            )
+          }
           renderItem={({ item }) => {
             const mine = item.sender.id === me?.id;
             return (

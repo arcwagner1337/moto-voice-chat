@@ -108,10 +108,13 @@ JS/TS-правки доезжают до установленных release-пр
 - **Авто-публикация**: `eas-update.yml` гоняет `eas update` на каждый JS-push в `main`.
   Аккаунт EAS — `owner: 1mposs1bl3` (alexandr.bryaginya@gmail.com),
   `projectId b4c8eba9-d9ff-4978-a983-2c262c956a31`.
-- **Публиковать только с x86** (CI). `hermesc` в RN есть лишь под linux64/osx/win64;
-  на машине владельца (aarch64/Asahi) локальный `eas update`/`ota:direct` падает на
-  компиляции Hermes через FEX (`could not connect to muvm server`). Ручной вызов —
-  `bun run ota` = `gh workflow run eas-update.yml` (публикует на x86-раннере).
+- **Публикация с aarch64 (Asahi)**: прямой `eas update` падает — `hermesc` есть только
+  под x86 (linux64/osx/win64), компиляция Hermes через FEX/muvm рушится
+  (`could not connect to muvm server`). **Обход** (`bun run ota`): `expo export
+  --no-bytecode` (hermesc не вызывается, отдаётся обычный JS — Hermes в приложении
+  его исполнит) + `eas update --branch production --skip-bundler --input-dir dist`.
+  `bun run ota:ci` = `gh workflow run eas-update.yml` — публикация bytecode с x86-раннера
+  (быстрее, но нужен рабочий EXPO_TOKEN). Логин локально — `1mposs1bl3` (sessionSecret).
 - **Как применяется на телефоне**: по умолчанию (`checkAutomatically: ON_LOAD`)
   запуск N качает апдейт в фоне, запуск N+1 показывает. Кастомного `Updates.*`
   UI в коде нет.

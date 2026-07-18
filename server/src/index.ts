@@ -9,6 +9,15 @@ import { setupRealtime } from './realtime';
 
 const PORT = Number(process.env.PORT) || 3000;
 
+// Одиночная ошибка в обработчике запроса или сокете не должна ронять весь
+// сервер: логируем и продолжаем работать (для самохоста аптайм важнее краша).
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
 // HTTPS включается, если заданы пути к сертификату и ключу:
 //   TLS_CERT=/path/fullchain.pem TLS_KEY=/path/privkey.pem node dist/index.js
 // (например сертификаты Let's Encrypt на боевом сервере). Если переменных нет —

@@ -234,7 +234,7 @@ export const removeChatMember = (chatId: number, userId: number) =>
 // «Звонок»: другим участникам чата прилетает уведомление с приглашением
 // в голосовую комнату chat-<id>
 export const startChatCall = (chatId: number) =>
-  request(`/chats/${chatId}/call`, { method: 'POST' });
+  request<{ room: string }>(`/chats/${chatId}/call`, { method: 'POST' }).then((d) => d.room);
 
 // ---------- Карта и заезды ----------
 

@@ -369,18 +369,22 @@ api.post('/chats/:id/call', requireAuth, (req, res) => {
   const chatId = Number(req.params.id);
   if (!isChatMember(chatId, userId)) return res.status(403).json({ error: 'Нет доступа' });
   const from = getUserById(userId);
+  // Случайная скрытая комната на каждый звонок: угадать/зайти без приглашения
+  // нельзя. Room-id знают только участники чата (приходит в call:incoming) и
+  // звонящий (в ответе). Ручной вход по имени комнаты (общий войс) не трогаем.
+  const room = `call-${chatId}-${crypto.randomUUID()}`;
   const members: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
   for (const m of members) {
     if (m.user_id === userId) continue;
     const info = chatInfo(chatId, m.user_id);
     notifyUser(m.user_id, 'call:incoming', {
       chatId,
-      room: `chat-${chatId}`,
+      room,
       title: info?.title || 'Чат',
       from,
     });
   }
-  res.json({ ok: true });
+  res.json({ ok: true, room });
 });
 
 api.post('/chats/:id/read', requireAuth, (req, res) => {

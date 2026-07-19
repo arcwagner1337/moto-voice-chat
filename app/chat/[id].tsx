@@ -150,10 +150,15 @@ export default function ChatScreen() {
     );
   };
 
-  const call = () => {
-    // Остальным участникам прилетит уведомление «входящий звонок»
-    startChatCall(chatId).catch(() => {});
-    router.push({ pathname: '/(tabs)/three', params: { room: `chat-${chatId}` } });
+  const call = async () => {
+    // Сервер создаёт скрытую комнату и рассылает её участникам (call:incoming);
+    // мы заходим в ту же комнату, что вернулась в ответе.
+    try {
+      const room = await startChatCall(chatId);
+      router.push({ pathname: '/(tabs)/three', params: { room } });
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    }
   };
 
   const onNew = useCallback(

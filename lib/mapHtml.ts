@@ -93,6 +93,12 @@ export const MAP_HTML = `<!DOCTYPE html>
   }
 
   function centerOn(lat, lng) { map.setView([lat, lng], 15); }
+  // Подогнать карту под набор точек (просмотр заезда: трасса + пути участников)
+  function fitTo(points) {
+    if (!points || points.length < 2) return;
+    var ll = points.map(function (p) { return [p.lat, p.lng]; });
+    map.fitBounds(L.latLngBounds(ll), { padding: [40, 40] });
+  }
   // Мягкое следование в режиме навигации — едем за точкой, зум не трогаем.
   function panTo(lat, lng) { map.panTo([lat, lng], { animate: true, duration: 0.5 }); }
 
@@ -170,6 +176,7 @@ export const MAP_HTML = `<!DOCTYPE html>
   window.updateMarkers = updateMarkers;
   window.centerOn = centerOn;
   window.panTo = panTo;
+  window.fitTo = fitTo;
   window.setTrack = setTrack;
   window.setRideTracks = setRideTracks;
   window.setRoute = setRoute;

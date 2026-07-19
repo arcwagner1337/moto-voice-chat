@@ -225,6 +225,15 @@ export default function MapScreen() {
     activeRideRef.current = activeRide;
   }, [activeRide]);
 
+  // Какой заезд сейчас «смотрим»: открытый из истории — приоритетнее активного.
+  // По нему рисуем трассу и цветные пути участников на карте.
+  const viewedRide =
+    openHistoryId != null ? history.find((r) => r.id === openHistoryId) || null : activeRide;
+  const viewedRideRef = useRef<RideInfo | null>(null);
+  useEffect(() => {
+    viewedRideRef.current = viewedRide;
+  }, [viewedRide]);
+
   // myPos обновляется на каждой GPS-точке (раз в ~секунду). Держим его и user в
   // ref'ах, чтобы pushMarkers оставался стабильным и не пересоздавал по цепочке
   // колбэки focus-эффекта (иначе он перезапускался каждую секунду = «постоянное
@@ -323,9 +332,10 @@ export default function MapScreen() {
     pushMarkers();
   }, [pushMarkers, activeRide, myPos, user]);
 
-  // Трасса на карте: пунктирный черновик в режиме разметки, иначе — трасса заезда
+  // Трасса на карте: пунктирный черновик в режиме разметки, иначе — трасса
+  // просматриваемого заезда (активного или открытого из истории)
   const pushTrack = useCallback(() => {
-    const points = editingRef.current ? draftTrack : activeRideRef.current?.track || [];
+    const points = editingRef.current ? draftTrack : viewedRideRef.current?.track || [];
     webRef.current?.injectJavaScript(
       `window.setTrack && window.setTrack(${JSON.stringify(points)}, ${editingRef.current}); true;`
     );
@@ -333,11 +343,11 @@ export default function MapScreen() {
 
   useEffect(() => {
     pushTrack();
-  }, [pushTrack, activeRide, editingTrack]);
+  }, [pushTrack, viewedRide, editingTrack]);
 
-  // Цветные полоски реально пройденного пути каждого участника активного заезда
+  // Цветные полоски реально пройденного пути каждого участника просматриваемого заезда
   const pushRideTracks = useCallback(() => {
-    const ride = activeRideRef.current;
+    const ride = viewedRideRef.current;
     const list =
       mapMode === 'rides' && ride
         ? ride.leaderboard
@@ -351,7 +361,21 @@ export default function MapScreen() {
 
   useEffect(() => {
     pushRideTracks();
-  }, [pushRideTracks, activeRide]);
+  }, [pushRideTracks, viewedRide]);
+
+  // При открытии заезда из истории — подгоняем карту под его трассу и пути
+  useEffect(() => {
+    if (openHistoryId == null) return;
+    const r = history.find((x) => x.id === openHistoryId);
+    if (!r) return;
+    const pts: TrackPoint[] = [
+      ...(r.track || []),
+      ...r.leaderboard.flatMap((e) => e.path || []),
+    ];
+    if (pts.length > 1) {
+      webRef.current?.injectJavaScript(`window.fitTo && window.fitTo(${JSON.stringify(pts)}); true;`);
+    }
+  }, [openHistoryId, history]);
 
   // Одиночный маршрут на карте: во время записи (оранжевый), предпросмотр
   // записанного (фиолетовый) или просмотр сохранённого/чужого.

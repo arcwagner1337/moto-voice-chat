@@ -1,24 +1,48 @@
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, ScrollView, StatusBar, PermissionsAndroid, Platform, Linking, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, StatusBar, PermissionsAndroid, Platform, Linking, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FontAwesome5 } from '@expo/vector-icons';
 import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Audio } from 'expo-av';
+import * as Updates from 'expo-updates';
 import { loadProfile } from '../../lib/profile';
 import { pingServer } from '../../lib/api';
 import ScreenHeader from '../../components/ScreenHeader';
+
+type UpdateState = 'current' | 'checking' | 'available' | 'downloading' | 'error' | 'disabled';
+
+const UPDATE_LABEL: Record<UpdateState, string> = {
+  current: 'UP_TO_DATE',
+  checking: 'CHECKING...',
+  available: 'AVAILABLE',
+  downloading: 'DOWNLOADING...',
+  error: 'CHECK_FAILED',
+  disabled: 'DEV_BUILD',
+};
+const UPDATE_COLOR: Record<UpdateState, string> = {
+  current: 'bg-emerald-500',
+  checking: 'bg-amber-500',
+  available: 'bg-cyan-500',
+  downloading: 'bg-amber-500',
+  error: 'bg-rose-500',
+  disabled: 'bg-slate-500',
+};
 
 export default function ProjectInfo() {
   useKeepAwake();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [isServiceActive, setIsServiceActive] = useState(false);
+  const [audioReady, setAudioReady] = useState(false);
   const [profileName, setProfileName] = useState('');
   const [profileAvatar, setProfileAvatar] = useState('👤');
   // null = проверяем, true = сервер отвечает, false = недоступен
   const [serverOnline, setServerOnline] = useState<boolean | null>(null);
+  const [updateState, setUpdateState] = useState<UpdateState>(
+    Updates.isEnabled ? 'checking' : 'disabled'
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -46,6 +70,49 @@ export default function ProjectInfo() {
     }, [])
   );
 
+  // Проверка OTA-обновления при запуске: если доступно — предлагаем скачать.
+  useEffect(() => {
+    if (!Updates.isEnabled) return;
+    let active = true;
+    (async () => {
+      try {
+        const res = await Updates.checkForUpdateAsync();
+        if (!active) return;
+        if (res.isAvailable) {
+          setUpdateState('available');
+          Alert.alert(
+            'Доступно обновление',
+            'Вышла новая версия приложения. Скачать и перезапустить сейчас?',
+            [
+              { text: 'Позже', style: 'cancel' },
+              { text: 'Скачать', onPress: () => downloadUpdate() },
+            ]
+          );
+        } else {
+          setUpdateState('current');
+        }
+      } catch {
+        if (active) setUpdateState('error');
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const downloadUpdate = async () => {
+    if (!Updates.isEnabled) return;
+    setUpdateState('downloading');
+    try {
+      await Updates.fetchUpdateAsync();
+      // Применяем сразу — приложение перезапустится на новую версию
+      await Updates.reloadAsync();
+    } catch {
+      setUpdateState('error');
+      Alert.alert('Ошибка', 'Не удалось скачать обновление. Проверьте связь и попробуйте позже.');
+    }
+  };
+
   useEffect(() => {
     // Foreground service с типом microphone здесь НЕ запускаем: на Android 14+
     // его нельзя стартовать без выданного RECORD_AUDIO (SecurityException),
@@ -61,6 +128,7 @@ export default function ProjectInfo() {
           staysActiveInBackground: true, // Не дает Android усыпить аудио-поток в темноте
           playThroughEarpieceAndroid: false,
         });
+        setAudioReady(true);
 
         // 2. Запрос разрешений на уведомления для Android 13+
         if (Platform.OS === 'android' && Platform.Version >= 33) {
@@ -134,6 +202,31 @@ export default function ProjectInfo() {
           </TouchableOpacity>
         </View>
 
+        {(updateState === 'available' || updateState === 'downloading') && (
+          <TouchableOpacity
+            onPress={downloadUpdate}
+            disabled={updateState === 'downloading'}
+            className="flex-row items-center bg-cyan-500/10 border border-cyan-500/50 rounded-3xl p-4 mb-4"
+          >
+            <Text className="text-2xl mr-3">⬇️</Text>
+            <View className="flex-1">
+              <Text className="text-cyan-300 font-bold text-sm">
+                {updateState === 'downloading' ? 'Скачиваю обновление…' : 'Доступно обновление'}
+              </Text>
+              <Text className="text-slate-400 text-[11px]">
+                {updateState === 'downloading'
+                  ? 'Приложение перезапустится автоматически'
+                  : 'Нажмите, чтобы скачать и перезапустить'}
+              </Text>
+            </View>
+            {updateState === 'downloading' ? (
+              <ActivityIndicator color="#22d3ee" />
+            ) : (
+              <Text className="text-cyan-400 font-black text-[10px] uppercase">Скачать</Text>
+            )}
+          </TouchableOpacity>
+        )}
+
         <View className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6 mb-8">
           <Text className="text-slate-500 font-mono text-[10px] mb-4 uppercase">Diagnostic_Report:</Text>
           <View className="gap-y-3">
@@ -144,12 +237,19 @@ export default function ProjectInfo() {
             />
             <StatusRow
               label="BACKGROUND_KERNEL"
-              status={isServiceActive ? "ACTIVE_SERVICE" : "ERROR / STANDBY"} 
-              color={isServiceActive ? "bg-cyan-500" : "bg-rose-500"} 
+              status={isServiceActive ? 'ACTIVE_SERVICE' : 'ERROR / STANDBY'}
+              color={isServiceActive ? 'bg-cyan-500' : 'bg-rose-500'}
             />
-            <StatusRow label="AUDIO_KERNEL" status="READY" color="bg-emerald-500" />
-            <StatusRow label="UDP_TRANSCEIVER" status="ONLINE" color="bg-emerald-500" />
-            <StatusRow label="P2P_SIGNALING" status="STANDBY" color="bg-cyan-500" />
+            <StatusRow
+              label="AUDIO_KERNEL"
+              status={audioReady ? 'READY' : 'STANDBY'}
+              color={audioReady ? 'bg-emerald-500' : 'bg-slate-500'}
+            />
+            <StatusRow
+              label="APP_UPDATE"
+              status={UPDATE_LABEL[updateState]}
+              color={UPDATE_COLOR[updateState]}
+            />
           </View>
         </View>
 

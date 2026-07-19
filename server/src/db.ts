@@ -249,6 +249,11 @@ export function friendIdsOf(userId: number): number[] {
   return rows.map((r) => r.fid as number);
 }
 
+export function chatMemberIds(chatId: number): number[] {
+  const rows: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+  return rows.map((r) => r.user_id as number);
+}
+
 // ---------- Маршруты ----------
 
 // Маршрут виден: владельцу всегда; публичный — всем; friends — только друзьям.

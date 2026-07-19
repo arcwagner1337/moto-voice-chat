@@ -1,6 +1,6 @@
 import type { Server } from 'socket.io';
 import { verifyToken } from './auth';
-import { friendIdsOf, accumulateRideStats } from './db';
+import { friendIdsOf, chatMemberIds, getUserById, accumulateRideStats } from './db';
 
 let io: Server | null = null;
 
@@ -104,6 +104,28 @@ export function setupRealtime(server: Server) {
       const uid = socket.data.userId as number | undefined;
       if (!uid) return;
       storeLocation(uid, data);
+    });
+
+    // Поделиться точкой назначения: с участниками чата (chatId) или со всеми
+    // друзьями. Получателям прилетает nav:waypoint с координатами и автором.
+    socket.on('nav:waypoint', (data: any) => {
+      const uid = socket.data.userId as number | undefined;
+      if (!uid) return;
+      const lat = Number(data?.lat);
+      const lng = Number(data?.lng);
+      if (!isFinite(lat) || !isFinite(lng)) return;
+      const from = getUserById(uid);
+      const payload = {
+        from,
+        lat,
+        lng,
+        name: String(data?.name || 'Точка').slice(0, 60),
+      };
+      const chatId = Number(data?.chatId) || 0;
+      const targets = chatId ? chatMemberIds(chatId) : friendIdsOf(uid);
+      for (const t of targets) {
+        if (t !== uid) server.to(`user:${t}`).emit('nav:waypoint', payload);
+      }
     });
 
     socket.on('loc:stop', () => {

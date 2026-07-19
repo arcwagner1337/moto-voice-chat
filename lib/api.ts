@@ -207,6 +207,25 @@ export const addChatMembers = (chatId: number, memberIds: number[]) =>
 
 // Удалить участника из группы (или выйти самому). Возвращает обновлённый чат,
 // либо null, если удалили себя.
+// ---------- Навигатор ----------
+
+export type NavStep = { text: string; distance: number; lat: number; lng: number };
+export type RouteResult = {
+  distance: number;
+  duration: number;
+  geometry: TrackPoint[];
+  steps: NavStep[];
+};
+
+// Дорожный маршрут между двумя точками (turn-by-turn через backend-прокси)
+export const getRoad = (
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number }
+) =>
+  request<RouteResult>(
+    `/route?from=${from.lat},${from.lng}&to=${to.lat},${to.lng}`
+  );
+
 export const removeChatMember = (chatId: number, userId: number) =>
   request<{ chat: ChatSummary | null }>(`/chats/${chatId}/members/${userId}`, {
     method: 'DELETE',

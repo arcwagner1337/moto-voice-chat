@@ -881,3 +881,87 @@ api.delete('/chats/:id/messages/:msgId', requireAuth, (req, res) => {
   }
   res.json({ ok: true });
 });
+
+// ---------- Навигатор (turn-by-turn) ----------
+
+const DIR: Record<string, string> = {
+  left: 'налево',
+  right: 'направо',
+  'slight left': 'левее',
+  'slight right': 'правее',
+  'sharp left': 'резко налево',
+  'sharp right': 'резко направо',
+  straight: 'прямо',
+  uturn: 'разворот',
+};
+
+// Манёвр OSRM → короткая инструкция на русском
+function maneuverRu(m: any, name?: string): string {
+  const dir = m?.modifier ? DIR[m.modifier] || '' : '';
+  const road = name ? ` на ${name}` : '';
+  switch (m?.type) {
+    case 'depart':
+      return 'Старт';
+    case 'arrive':
+      return 'Вы на месте';
+    case 'turn':
+      return `Поверните ${dir}${road}`;
+    case 'new name':
+      return `Продолжайте${road}`;
+    case 'continue':
+      return `Продолжайте ${dir || 'движение'}${road}`;
+    case 'merge':
+      return `Перестройтесь ${dir}${road}`;
+    case 'on ramp':
+      return `Съезд ${dir}${road}`;
+    case 'off ramp':
+      return `Съезжайте ${dir}${road}`;
+    case 'fork':
+      return `Держитесь ${dir || 'по развилке'}${road}`;
+    case 'end of road':
+      return `В конце дороги — ${dir}${road}`;
+    case 'roundabout':
+    case 'rotary':
+      return `На круге — ${m?.exit ? m.exit + '-й съезд' : 'по кругу'}`;
+    default:
+      return `Продолжайте ${dir || 'движение'}${road}`;
+  }
+}
+
+// Прокси к OSRM (без ключей). Клиент шлёт from/to как "lat,lng".
+api.get('/route', requireAuth, async (req, res) => {
+  const parse = (s: any): [number, number] | null => {
+    const [lat, lng] = String(s || '').split(',').map(Number);
+    return isFinite(lat) && isFinite(lng) ? [lat, lng] : null;
+  };
+  const from = parse(req.query.from);
+  const to = parse(req.query.to);
+  if (!from || !to) return res.status(400).json({ error: 'Нужны from и to (lat,lng)' });
+
+  const url =
+    `https://router.project-osrm.org/route/v1/driving/` +
+    `${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson&steps=true`;
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    const j: any = await r.json();
+    if (j.code !== 'Ok' || !j.routes?.length) {
+      return res.status(502).json({ error: 'Маршрут не найден' });
+    }
+    const route = j.routes[0];
+    const geometry = route.geometry.coordinates.map((c: number[]) => ({ lat: c[1], lng: c[0] }));
+    const steps = (route.legs[0]?.steps || []).map((s: any) => ({
+      text: maneuverRu(s.maneuver, s.name),
+      distance: Math.round(s.distance),
+      lat: s.maneuver.location[1],
+      lng: s.maneuver.location[0],
+    }));
+    res.json({
+      distance: Math.round(route.distance),
+      duration: Math.round(route.duration),
+      geometry,
+      steps,
+    });
+  } catch {
+    res.status(502).json({ error: 'Роутинг временно недоступен' });
+  }
+});

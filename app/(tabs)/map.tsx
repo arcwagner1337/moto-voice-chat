@@ -12,6 +12,8 @@ import {
   RouteInfo,
   RouteVisibility,
   TrackPoint,
+  NavStep,
+  getRoad,
   getSavedUser,
   getFriendLocations,
   getActiveRides,
@@ -160,6 +162,30 @@ export default function MapScreen() {
   const navCumRef = useRef<number[]>([]);
   const arrivedRef = useRef(false);
 
+  // Навигатор к точке (дорожный turn-by-turn)
+  type RoadNav = {
+    dest: { lat: number; lng: number; name: string };
+    geometry: TrackPoint[];
+    steps: NavStep[];
+    distance: number;
+    duration: number;
+  };
+  const [pickingDest, setPickingDest] = useState(false);
+  const [buildingRoad, setBuildingRoad] = useState(false);
+  const pickingDestRef = useRef(false);
+  const [roadNav, setRoadNav] = useState<RoadNav | null>(null);
+  const roadNavRef = useRef<RoadNav | null>(null);
+  const roadCumRef = useRef<number[]>([]);
+  const roadStepAlongRef = useRef<number[]>([]);
+  const recalcAtRef = useRef(0);
+  const [roadInfo, setRoadInfo] = useState<{
+    remaining: number;
+    eta: number;
+    stepText: string;
+    stepDist: number;
+    offRoute: number;
+  } | null>(null);
+
   // Запись маршрута
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
@@ -174,10 +200,18 @@ export default function MapScreen() {
   const [editingTrack, setEditingTrack] = useState(false);
   const [draftTrack, setDraftTrack] = useState<TrackPoint[]>([]);
   const editingRef = useRef(false);
+  // Тапы по карте нужны и для разметки трассы, и для выбора точки навигатора
   useEffect(() => {
     editingRef.current = editingTrack;
-    webRef.current?.injectJavaScript(`window.setTapMode && window.setTapMode(${editingTrack}); true;`);
-  }, [editingTrack]);
+    const tap = editingTrack || pickingDest;
+    webRef.current?.injectJavaScript(`window.setTapMode && window.setTapMode(${tap}); true;`);
+  }, [editingTrack, pickingDest]);
+  useEffect(() => {
+    pickingDestRef.current = pickingDest;
+  }, [pickingDest]);
+  useEffect(() => {
+    roadNavRef.current = roadNav;
+  }, [roadNav]);
 
   // Базовый слой карты: тёмная схема или спутник
   useEffect(() => {
@@ -227,7 +261,8 @@ export default function MapScreen() {
         sharingRef.current ||
         recordingRef.current ||
         activeRideRef.current != null ||
-        navRouteRef.current != null;
+        navRouteRef.current != null ||
+        roadNavRef.current != null;
       if (goingBg) {
         if (needTracking && !bgTrackingRef.current) {
           startBackgroundTrackingSilent().then((started) => {
@@ -330,6 +365,11 @@ export default function MapScreen() {
   );
 
   useEffect(() => {
+    // Дорожный навигатор рисует свой маршрут поверх всего, пока активен
+    if (roadNav) {
+      pushRoute(roadNav.geometry, '#38bdf8', false);
+      return;
+    }
     if (mapMode !== 'routes') {
       pushRoute([], '#a78bfa', false);
       return;
@@ -344,13 +384,17 @@ export default function MapScreen() {
     } else {
       pushRoute([], '#a78bfa', false);
     }
-  }, [mapMode, recording, recordCount, pendingRoute, viewingRouteId, myRoutes, sharedRoutes, pushRoute]);
+  }, [roadNav, mapMode, recording, recordCount, pendingRoute, viewingRouteId, myRoutes, sharedRoutes, pushRoute]);
 
   const onWebViewMessage = (event: any) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
-      if (msg.type === 'tap' && editingRef.current) {
+      if (msg.type !== 'tap') return;
+      if (editingRef.current) {
         setDraftTrack((prev) => (prev.length >= 50 ? prev : [...prev, { lat: msg.lat, lng: msg.lng }]));
+      } else if (pickingDestRef.current) {
+        setPickingDest(false);
+        buildRoad({ lat: msg.lat, lng: msg.lng, name: 'Точка на карте' });
       }
     } catch {}
   };
@@ -387,7 +431,7 @@ export default function MapScreen() {
         setRecordCount(arr.length);
       }
     }
-    // Навигация: считаем остаток/отклонение и ведём камеру за пользователем
+    // Навигация по сохранённому маршруту: остаток/отклонение + камера за юзером
     const nav = navRouteRef.current;
     if (nav) {
       const { offTrack, along, total } = navProgress(p, nav.track, navCumRef.current);
@@ -400,10 +444,54 @@ export default function MapScreen() {
       setNavInfo({ remaining, offTrack, progress: total > 0 ? along / total : 0, arrived });
       webRef.current?.injectJavaScript(`window.panTo && window.panTo(${p.lat}, ${p.lng}); true;`);
     }
+
+    // Дорожный навигатор: остаток/ETA, ближайший манёвр, пересчёт при съезде
+    const road = roadNavRef.current;
+    if (road) {
+      const { offTrack, along, total } = navProgress(p, road.geometry, roadCumRef.current);
+      const remaining = Math.max(0, total - along);
+      const alongs = roadStepAlongRef.current;
+      let stepText = 'В путь';
+      let stepDist = remaining;
+      for (let i = 0; i < alongs.length; i++) {
+        if (alongs[i] > along + 5) {
+          stepText = road.steps[i].text;
+          stepDist = alongs[i] - along;
+          break;
+        }
+      }
+      const eta = road.distance > 0 ? Math.round(road.duration * (remaining / road.distance)) : 0;
+      webRef.current?.injectJavaScript(`window.panTo && window.panTo(${p.lat}, ${p.lng}); true;`);
+      if (remaining <= 30) {
+        roadNavRef.current = null;
+        setRoadNav(null);
+        setRoadInfo(null);
+        Alert.alert('Прибытие', `Вы на месте: ${road.dest.name}`);
+      } else {
+        setRoadInfo({ remaining, eta, stepText, stepDist, offRoute: offTrack });
+        // Съехали с маршрута — перестраиваем (не чаще раза в 8 сек)
+        if (offTrack > 80 && Date.now() - recalcAtRef.current > 8000) {
+          recalcAtRef.current = Date.now();
+          getRoad({ lat: p.lat, lng: p.lng }, road.dest)
+            .then((r) => {
+              if (!roadNavRef.current) return;
+              const cum = cumulativeMeters(r.geometry);
+              const upd: RoadNav = { ...road, geometry: r.geometry, steps: r.steps, distance: r.distance, duration: r.duration };
+              roadNavRef.current = upd;
+              roadCumRef.current = cum;
+              roadStepAlongRef.current = r.steps.map(
+                (s) => navProgress({ lat: s.lat, lng: s.lng }, r.geometry, cum).along
+              );
+              setRoadNav(upd);
+            })
+            .catch(() => {});
+        }
+      }
+    }
   }, []);
 
   // GPS нужен для записи маршрута и навигации, даже если трансляция выключена
-  useLiveLocation(sharing || recording || navRoute != null, onPoint);
+  useLiveLocation(sharing || recording || navRoute != null || roadNav != null, onPoint);
 
   // Обновление заезда каждые 5 секунд (статистику считает сервер)
   useEffect(() => {
@@ -481,6 +569,17 @@ export default function MapScreen() {
         if (cur) getRide(cur.id).then(setActiveRide).catch(() => {});
       };
       const onRoutesUpdate = () => refreshRoutes();
+      const onWaypoint = (w: { from?: SocialUser; lat: number; lng: number; name: string }) => {
+        const who = w.from ? `${w.from.avatar} ${w.from.displayName}` : 'Друг';
+        Alert.alert(
+          '📍 Поделились точкой',
+          `${who} отправил точку «${w.name}». Построить маршрут туда?`,
+          [
+            { text: 'Позже', style: 'cancel' },
+            { text: 'Поехали', onPress: () => buildRoad({ lat: w.lat, lng: w.lng, name: w.name }) },
+          ]
+        );
+      };
 
       (async () => {
         const saved = await getSavedUser();
@@ -499,6 +598,7 @@ export default function MapScreen() {
             sock.on('loc:friend-stop', onFriendStop);
             sock.on('rides:update', onRidesUpdate);
             sock.on('routes:update', onRoutesUpdate);
+            sock.on('nav:waypoint', onWaypoint);
           }
         }
       })();
@@ -510,6 +610,7 @@ export default function MapScreen() {
           sock.off('loc:friend-stop', onFriendStop);
           sock.off('rides:update', onRidesUpdate);
           sock.off('routes:update', onRoutesUpdate);
+          sock.off('nav:waypoint', onWaypoint);
         }
       };
     }, [pushMarkers, refreshFriendLocations, refreshRides, refreshRoutes])
@@ -751,6 +852,50 @@ export default function MapScreen() {
     setNavInfo(null);
   };
 
+  // ---------- Навигатор к точке ----------
+
+  const buildRoad = async (dest: { lat: number; lng: number; name: string }) => {
+    const pos = myPosRef.current;
+    if (!pos) {
+      return Alert.alert('Нет позиции', 'Дождитесь GPS и попробуйте снова.');
+    }
+    setBuildingRoad(true);
+    try {
+      const r = await getRoad({ lat: pos.lat, lng: pos.lng }, dest);
+      const cum = cumulativeMeters(r.geometry);
+      const nav: RoadNav = { dest, geometry: r.geometry, steps: r.steps, distance: r.distance, duration: r.duration };
+      roadNavRef.current = nav;
+      roadCumRef.current = cum;
+      roadStepAlongRef.current = r.steps.map(
+        (s) => navProgress({ lat: s.lat, lng: s.lng }, r.geometry, cum).along
+      );
+      setRoadNav(nav);
+      setRoadInfo(null);
+      setFullMap(true);
+      webRef.current?.injectJavaScript(`window.centerOn(${pos.lat}, ${pos.lng}); true;`);
+    } catch (e) {
+      Alert.alert('Маршрут не построен', (e as Error).message);
+    } finally {
+      setBuildingRoad(false);
+    }
+  };
+
+  const stopRoadNav = () => {
+    roadNavRef.current = null;
+    setRoadNav(null);
+    setRoadInfo(null);
+    setPickingDest(false);
+  };
+
+  // Поделиться текущей точкой назначения со всеми (друзья/группа получат её)
+  const shareWaypoint = async () => {
+    const nav = roadNavRef.current;
+    if (!nav) return;
+    const sock = await getSocialSocket();
+    sock?.emit('nav:waypoint', { lat: nav.dest.lat, lng: nav.dest.lng, name: nav.dest.name });
+    Alert.alert('Точка отправлена', 'Друзья получили точку и смогут построить к ней маршрут.');
+  };
+
   const fmtDist = (m: number) => (m < 1000 ? `${Math.round(m)} м` : `${(m / 1000).toFixed(1)} км`);
   const fmtDur = (sec: number) => {
     const h = Math.floor(sec / 3600);
@@ -880,6 +1025,79 @@ export default function MapScreen() {
                   </>
                 ) : (
                   <Text className="text-slate-400 text-[11px]">Ждём GPS…</Text>
+                )}
+              </View>
+            )}
+
+            {/* Кнопка навигатора (над «домой») */}
+            {!roadNav && !editingTrack && (
+              <TouchableOpacity
+                onPress={() => setPickingDest((v) => !v)}
+                className={`absolute bottom-16 right-3 w-10 h-10 rounded-xl items-center justify-center border ${
+                  pickingDest ? 'bg-sky-600 border-sky-400' : 'bg-slate-900/90 border-cyan-500/50'
+                }`}
+              >
+                <Text className="text-base">{pickingDest ? '✕' : '📍'}</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Подсказка выбора точки */}
+            {pickingDest && (
+              <View
+                style={{ top: insets.top + 12 }}
+                className="absolute left-3 right-16 bg-sky-950/95 border border-sky-500/60 rounded-2xl p-3"
+              >
+                <Text className="text-sky-300 text-xs font-bold text-center">
+                  📍 Тапните на карте точку назначения — построю маршрут
+                </Text>
+              </View>
+            )}
+
+            {/* Строю маршрут… */}
+            {buildingRoad && (
+              <View className="absolute inset-0 items-center justify-center bg-black/30">
+                <View className="bg-slate-900 rounded-2xl px-5 py-4 border border-slate-700 flex-row items-center">
+                  <ActivityIndicator color="#38bdf8" />
+                  <Text className="text-white text-sm ml-3">Строю маршрут…</Text>
+                </View>
+              </View>
+            )}
+
+            {/* HUD дорожного навигатора */}
+            {roadNav && (
+              <View
+                style={{ top: insets.top + 12 }}
+                className="absolute left-3 right-3 bg-slate-950/95 border border-sky-500/60 rounded-2xl p-3"
+              >
+                <View className="flex-row items-center">
+                  <View className="flex-1">
+                    <Text className="text-sky-300 font-bold text-base" numberOfLines={2}>
+                      ➤ {roadInfo?.stepText || 'Строю…'}
+                    </Text>
+                    {roadInfo && (
+                      <Text className="text-white font-mono text-xs mt-0.5">
+                        через {fmtDist(roadInfo.stepDist)}
+                      </Text>
+                    )}
+                  </View>
+                  <View className="items-end ml-2">
+                    <TouchableOpacity onPress={stopRoadNav} className="px-3 py-1 rounded-lg bg-red-600 mb-1">
+                      <Text className="text-white text-[10px] font-bold uppercase">Стоп</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={shareWaypoint} className="px-3 py-1 rounded-lg bg-sky-600">
+                      <Text className="text-white text-[10px] font-bold uppercase">Поделиться</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                {roadInfo && (
+                  <View className="flex-row justify-between mt-2 pt-2 border-t border-slate-800">
+                    <Text className="text-white font-mono text-xs">
+                      До точки: <Text className="text-cyan-400 font-bold">{fmtDist(roadInfo.remaining)}</Text>
+                    </Text>
+                    <Text className="text-white font-mono text-xs">
+                      ⏱ {fmtDur(roadInfo.eta)}
+                    </Text>
+                  </View>
                 )}
               </View>
             )}

@@ -123,15 +123,30 @@ export default function MapScreen() {
     activeRideRef.current = activeRide;
   }, [activeRide]);
 
+  // myPos обновляется на каждой GPS-точке (раз в ~секунду). Держим его и user в
+  // ref'ах, чтобы pushMarkers оставался стабильным и не пересоздавал по цепочке
+  // колбэки focus-эффекта (иначе он перезапускался каждую секунду = «постоянное
+  // обновление» списков заездов/маршрутов и реконнекты).
+  const myPosRef = useRef<GeoPoint | null>(null);
+  useEffect(() => {
+    myPosRef.current = myPos;
+  }, [myPos]);
+  const userRef = useRef<SocialUser | null>(null);
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
   // ---------- Карта ----------
 
   const pushMarkers = useCallback(() => {
+    const currentUser = userRef.current;
+    const pos = myPosRef.current;
     const byId: { [id: string]: MarkerData } = {};
     for (const m of Object.values(friendMarkers.current)) byId[m.id] = m;
     // Участники активного заезда (могут не быть друзьями)
     if (activeRideRef.current) {
       for (const e of activeRideRef.current.leaderboard) {
-        if (e.user.id === user?.id || !e.location) continue;
+        if (e.user.id === currentUser?.id || !e.location) continue;
         byId[String(e.user.id)] = {
           id: String(e.user.id),
           lat: e.location.lat,
@@ -143,25 +158,27 @@ export default function MapScreen() {
       }
     }
     const list = Object.values(byId);
-    if (myPos) {
+    if (pos) {
       list.push({
         id: 'me',
-        lat: myPos.lat,
-        lng: myPos.lng,
-        avatar: user?.avatar || '🏍️',
-        name: user?.displayName || 'Я',
-        speed: myPos.speedKmh,
+        lat: pos.lat,
+        lng: pos.lng,
+        avatar: currentUser?.avatar || '🏍️',
+        name: currentUser?.displayName || 'Я',
+        speed: pos.speedKmh,
         me: true,
       });
     }
     webRef.current?.injectJavaScript(
       `window.updateMarkers && window.updateMarkers(${JSON.stringify(list)}); true;`
     );
-  }, [myPos, user]);
+  }, []);
 
+  // Перерисовка маркеров при новой позиции/юзере/составе заезда. pushMarkers
+  // стабилен — здесь именно данные (myPos/user/activeRide) дёргают перерисовку.
   useEffect(() => {
     pushMarkers();
-  }, [pushMarkers, activeRide]);
+  }, [pushMarkers, activeRide, myPos, user]);
 
   // Трасса на карте: пунктирный черновик в режиме разметки, иначе — трасса заезда
   const pushTrack = useCallback(() => {

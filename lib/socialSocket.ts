@@ -22,7 +22,9 @@ export async function getSocialSocket(): Promise<Socket | null> {
   }
   if (!socket) {
     socket = io(base, {
-      transports: ['websocket'],
+      // Через dev-tunnel «чистый» websocket часто не апгрейдится/рвётся —
+      // разрешаем polling как фолбэк, иначе клиент реконнектится по кругу.
+      transports: ['websocket', 'polling'],
       reconnection: true,
       auth: { token },
     });

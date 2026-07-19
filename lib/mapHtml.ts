@@ -89,6 +89,8 @@ export const MAP_HTML = `<!DOCTYPE html>
   }
 
   function centerOn(lat, lng) { map.setView([lat, lng], 15); }
+  // Мягкое следование в режиме навигации — едем за точкой, зум не трогаем.
+  function panTo(lat, lng) { map.panTo([lat, lng], { animate: true, duration: 0.5 }); }
 
   // Трасса заезда: линия + нумерованные чекпоинты. draft=true — пунктир (режим разметки)
   var trackLayer = null;
@@ -163,6 +165,7 @@ export const MAP_HTML = `<!DOCTYPE html>
 
   window.updateMarkers = updateMarkers;
   window.centerOn = centerOn;
+  window.panTo = panTo;
   window.setTrack = setTrack;
   window.setRideTracks = setRideTracks;
   window.setRoute = setRoute;

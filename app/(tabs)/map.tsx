@@ -56,6 +56,47 @@ function metersBetween(a: TrackPoint, b: TrackPoint): number {
     Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(s));
 }
+// Кумулятивные расстояния вдоль трека (метры от старта до каждой точки)
+function cumulativeMeters(track: TrackPoint[]): number[] {
+  const cum = [0];
+  for (let i = 1; i < track.length; i++) cum[i] = cum[i - 1] + metersBetween(track[i - 1], track[i]);
+  return cum;
+}
+
+// Проекция позиции на маршрут: ближайшая точка трека, отклонение от трека (м),
+// пройдено вдоль маршрута (м). Локальная равнопромежуточная метрика — для
+// коротких сегментов точности хватает.
+function navProgress(
+  pos: { lat: number; lng: number },
+  track: TrackPoint[],
+  cum: number[]
+): { offTrack: number; along: number; total: number } {
+  const total = cum[cum.length - 1] || 0;
+  if (track.length < 2) return { offTrack: 0, along: 0, total };
+  const mLat = 111320;
+  const mLng = 111320 * Math.cos((pos.lat * Math.PI) / 180);
+  let best = { offTrack: Infinity, along: 0 };
+  for (let i = 0; i < track.length - 1; i++) {
+    const ax = (track[i].lng - pos.lng) * mLng;
+    const ay = (track[i].lat - pos.lat) * mLat;
+    const bx = (track[i + 1].lng - pos.lng) * mLng;
+    const by = (track[i + 1].lat - pos.lat) * mLat;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const segLen2 = dx * dx + dy * dy;
+    // t — проекция точки (0,0) на отрезок AB, зажатая в [0,1]
+    const t = segLen2 > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / segLen2)) : 0;
+    const px = ax + t * dx;
+    const py = ay + t * dy;
+    const off = Math.hypot(px, py);
+    if (off < best.offTrack) {
+      const segLen = cum[i + 1] - cum[i];
+      best = { offTrack: off, along: cum[i] + t * segLen };
+    }
+  }
+  return { offTrack: best.offTrack, along: best.along, total };
+}
+
 const VIS_LABEL: Record<RouteVisibility, string> = {
   private: '🔒 Только я',
   friends: '👥 Друзьям',
@@ -101,6 +142,18 @@ export default function MapScreen() {
   const [sharedRoutes, setSharedRoutes] = useState<RouteInfo[]>([]);
   const [routesLoading, setRoutesLoading] = useState(false);
   const [viewingRouteId, setViewingRouteId] = useState<number | null>(null);
+
+  // Навигация по маршруту (режим следования)
+  const [navRoute, setNavRoute] = useState<RouteInfo | null>(null);
+  const [navInfo, setNavInfo] = useState<{
+    remaining: number;
+    offTrack: number;
+    progress: number;
+    arrived: boolean;
+  } | null>(null);
+  const navRouteRef = useRef<RouteInfo | null>(null);
+  const navCumRef = useRef<number[]>([]);
+  const arrivedRef = useRef(false);
 
   // Запись маршрута
   const [recording, setRecording] = useState(false);
@@ -166,7 +219,10 @@ export default function MapScreen() {
     const sub = AppState.addEventListener('change', (state) => {
       const goingBg = state === 'background' || state === 'inactive';
       const needTracking =
-        sharingRef.current || recordingRef.current || activeRideRef.current != null;
+        sharingRef.current ||
+        recordingRef.current ||
+        activeRideRef.current != null ||
+        navRouteRef.current != null;
       if (goingBg) {
         if (needTracking && !bgTrackingRef.current) {
           startBackgroundTrackingSilent().then((started) => {
@@ -326,10 +382,23 @@ export default function MapScreen() {
         setRecordCount(arr.length);
       }
     }
+    // Навигация: считаем остаток/отклонение и ведём камеру за пользователем
+    const nav = navRouteRef.current;
+    if (nav) {
+      const { offTrack, along, total } = navProgress(p, nav.track, navCumRef.current);
+      const remaining = Math.max(0, total - along);
+      const arrived = remaining <= 25 && along > total * 0.5;
+      if (arrived && !arrivedRef.current) {
+        arrivedRef.current = true;
+        Alert.alert('Финиш', `Вы прошли маршрут «${nav.name}»`);
+      }
+      setNavInfo({ remaining, offTrack, progress: total > 0 ? along / total : 0, arrived });
+      webRef.current?.injectJavaScript(`window.panTo && window.panTo(${p.lat}, ${p.lng}); true;`);
+    }
   }, []);
 
-  // GPS нужен и для записи маршрута, даже если трансляция позиции выключена
-  useLiveLocation(sharing || recording, onPoint);
+  // GPS нужен для записи маршрута и навигации, даже если трансляция выключена
+  useLiveLocation(sharing || recording || navRoute != null, onPoint);
 
   // Обновление заезда каждые 5 секунд (статистику считает сервер)
   useEffect(() => {
@@ -644,6 +713,7 @@ export default function MapScreen() {
           try {
             await deleteRoute(r.id);
             if (viewingRouteId === r.id) setViewingRouteId(null);
+            if (navRouteRef.current?.id === r.id) stopNavigation();
             refreshRoutes();
           } catch (e) {
             Alert.alert('Ошибка', (e as Error).message);
@@ -651,6 +721,29 @@ export default function MapScreen() {
         },
       },
     ]);
+  };
+
+  const startNavigation = (r: RouteInfo) => {
+    if (!r.track || r.track.length < 2) {
+      return Alert.alert('Нельзя ехать', 'В маршруте слишком мало точек.');
+    }
+    navRouteRef.current = r;
+    navCumRef.current = cumulativeMeters(r.track);
+    arrivedRef.current = false;
+    setNavRoute(r);
+    setNavInfo(null);
+    setViewingRouteId(r.id); // маршрут отрисуется на карте
+    setFullMap(true); // навигация на весь экран
+    if (myPos) {
+      webRef.current?.injectJavaScript(`window.centerOn(${myPos.lat}, ${myPos.lng}); true;`);
+    }
+  };
+
+  const stopNavigation = () => {
+    navRouteRef.current = null;
+    arrivedRef.current = false;
+    setNavRoute(null);
+    setNavInfo(null);
   };
 
   const fmtDist = (m: number) => (m < 1000 ? `${Math.round(m)} м` : `${(m / 1000).toFixed(1)} км`);
@@ -736,6 +829,51 @@ export default function MapScreen() {
                 <Text className="text-cyan-400 text-[10px] font-bold text-center">
                   Тапайте по карте — точки станут чекпоинтами ({draftTrack.length}/50)
                 </Text>
+              </View>
+            )}
+
+            {/* HUD навигации по маршруту */}
+            {navRoute && (
+              <View
+                style={{ top: insets.top + 12 }}
+                className="absolute left-3 right-16 bg-slate-950/95 border border-violet-500/50 rounded-2xl p-3"
+              >
+                <View className="flex-row items-center justify-between mb-1.5">
+                  <Text className="text-violet-300 font-bold text-xs flex-1 mr-2" numberOfLines={1}>
+                    🧭 {navRoute.name}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={stopNavigation}
+                    className="px-3 py-1 rounded-lg bg-red-600"
+                  >
+                    <Text className="text-white text-[10px] font-bold uppercase">Стоп</Text>
+                  </TouchableOpacity>
+                </View>
+                {navInfo ? (
+                  <>
+                    <View className="flex-row justify-between">
+                      <Text className="text-white font-mono text-sm">
+                        Осталось: <Text className="text-cyan-400 font-bold">{fmtDist(navInfo.remaining)}</Text>
+                      </Text>
+                      <Text
+                        className={`font-mono text-sm font-bold ${
+                          navInfo.offTrack > 40 ? 'text-rose-400' : 'text-emerald-400'
+                        }`}
+                      >
+                        {navInfo.offTrack > 40 ? `⚠ ${fmtDist(navInfo.offTrack)} от трассы` : '● на трассе'}
+                      </Text>
+                    </View>
+                    {/* Прогресс-бар */}
+                    <View className="h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
+                      <View
+                        style={{ width: `${Math.round(navInfo.progress * 100)}%` }}
+                        className="h-full bg-violet-500 rounded-full"
+                      />
+                    </View>
+                  </>
+                ) : (
+                  <Text className="text-slate-400 text-[11px]">Ждём GPS…</Text>
+                )}
               </View>
             )}
           </View>
@@ -1175,8 +1313,10 @@ export default function MapScreen() {
                       key={r.id}
                       route={r}
                       active={viewingRouteId === r.id}
+                      navigating={navRoute?.id === r.id}
                       distanceLabel={fmtDist(r.distance)}
                       onToggle={() => setViewingRouteId((p) => (p === r.id ? null : r.id))}
+                      onNavigate={() => (navRoute?.id === r.id ? stopNavigation() : startNavigation(r))}
                       onCycleVis={() => {
                         const order: RouteVisibility[] = ['private', 'friends', 'public'];
                         changeVisibility(r, order[(order.indexOf(r.visibility) + 1) % 3]);
@@ -1203,8 +1343,10 @@ export default function MapScreen() {
                         key={r.id}
                         route={r}
                         active={viewingRouteId === r.id}
+                        navigating={navRoute?.id === r.id}
                         distanceLabel={fmtDist(r.distance)}
                         onToggle={() => setViewingRouteId((p) => (p === r.id ? null : r.id))}
+                        onNavigate={() => (navRoute?.id === r.id ? stopNavigation() : startNavigation(r))}
                       />
                     ))
                   )}
@@ -1223,15 +1365,19 @@ export default function MapScreen() {
 function RouteRow({
   route,
   active,
+  navigating,
   distanceLabel,
   onToggle,
+  onNavigate,
   onCycleVis,
   onDelete,
 }: {
   route: RouteInfo;
   active: boolean;
+  navigating?: boolean;
   distanceLabel: string;
   onToggle: () => void;
+  onNavigate?: () => void;
   onCycleVis?: () => void;
   onDelete?: () => void;
 }) {
@@ -1251,6 +1397,18 @@ function RouteRow({
             {route.owner?.avatar} {route.owner?.displayName} · {distanceLabel} · {route.track.length} тчк
           </Text>
         </TouchableOpacity>
+        {onNavigate && (
+          <TouchableOpacity
+            onPress={onNavigate}
+            className={`px-3 py-2 rounded-xl border mr-2 ${
+              navigating ? 'bg-emerald-500/20 border-emerald-400' : 'bg-emerald-600 border-emerald-500'
+            }`}
+          >
+            <Text className="text-[10px] font-bold text-white uppercase">
+              {navigating ? '● Едем' : '▶ Ехать'}
+            </Text>
+          </TouchableOpacity>
+        )}
         {onCycleVis && (
           <TouchableOpacity
             onPress={onCycleVis}

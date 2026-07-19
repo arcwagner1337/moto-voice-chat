@@ -19,7 +19,10 @@ import {
 import InCallManager from 'react-native-incall-manager';
 import { mediaDevices, RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCView } from 'react-native-webrtc';
 import io from 'socket.io-client';
+import { Audio } from 'expo-av';
+import { Modal } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { searchMusic, MusicTrack } from '../../lib/api';
 import notifee, { AndroidImportance, AndroidCategory, AndroidColor, AndroidForegroundServiceType, EventType } from '@notifee/react-native';
 import { loadProfile } from '../../lib/profile';
 import { BACKEND_URL } from '../../lib/config';
@@ -61,6 +64,15 @@ export default function InternetChatRoom() {
 	const [isSpeaker, setIsSpeaker] = useState(true);
 	const [availableMics, setAvailableMics] = useState<any[]>([]);
 	const [currentMicIdx, setCurrentMicIdx] = useState(0);
+
+	// Синхронный музыкальный плеер комнаты (Audius)
+	const [musicOpen, setMusicOpen] = useState(false);
+	const [musicQuery, setMusicQuery] = useState('');
+	const [musicResults, setMusicResults] = useState<MusicTrack[]>([]);
+	const [musicSearching, setMusicSearching] = useState(false);
+	const [nowPlaying, setNowPlaying] = useState<MusicTrack | null>(null);
+	const [musicPlaying, setMusicPlaying] = useState(false);
+	const soundRef = useRef<Audio.Sound | null>(null);
 
 	const socket = useRef<any>(null);
 	const peers = useRef<{ [key: string]: RTCPeerConnection }>({});
@@ -321,6 +333,24 @@ export default function InternetChatRoom() {
 				updateUI();
 			}
 		});
+		// Синхронный плеер: подхватываем трек/управление от диджея
+		socket.current.on('music:set', (st: any) => {
+			if (!st?.track) return;
+			const elapsed = st.playing ? (Date.now() - st.at) / 1000 : 0;
+			loadAndPlay(st.track, (st.position + elapsed) * 1000, !!st.playing);
+		});
+		socket.current.on('music:control', (d: any) => {
+			const s = soundRef.current;
+			if (!s) return;
+			const elapsed = d.playing ? (Date.now() - d.at) / 1000 : 0;
+			s.setStatusAsync({ shouldPlay: !!d.playing, positionMillis: Math.max(0, (d.position + elapsed) * 1000) }).catch(() => { });
+			setMusicPlaying(!!d.playing);
+		});
+		socket.current.on('music:stop', () => {
+			if (soundRef.current) { soundRef.current.unloadAsync().catch(() => { }); soundRef.current = null; }
+			setNowPlaying(null);
+			setMusicPlaying(false);
+		});
 		socket.current.emit("join-room", targetRoom, userName);
 	};
 
@@ -480,6 +510,66 @@ export default function InternetChatRoom() {
 		setCurrentMsg('');
 	};
 
+	// ---------- Музыка (синхронный плеер комнаты) ----------
+
+	// Загрузить трек и начать с нужной секунды (для синхронизации с комнатой)
+	const loadAndPlay = async (track: MusicTrack, positionMillis: number, play: boolean) => {
+		try {
+			if (soundRef.current) {
+				try { await soundRef.current.unloadAsync(); } catch { }
+				soundRef.current = null;
+			}
+			const { sound } = await Audio.Sound.createAsync(
+				{ uri: track.streamUrl },
+				{ shouldPlay: play, positionMillis: Math.max(0, positionMillis) }
+			);
+			soundRef.current = sound;
+			setNowPlaying(track);
+			setMusicPlaying(play);
+			sound.setOnPlaybackStatusUpdate((st: any) => {
+				if (st.isLoaded) setMusicPlaying(st.isPlaying);
+			});
+		} catch { }
+	};
+
+	const runMusicSearch = async () => {
+		const q = musicQuery.trim();
+		if (!q) return;
+		setMusicSearching(true);
+		try { setMusicResults(await searchMusic(q)); } catch { } finally { setMusicSearching(false); }
+	};
+
+	// Диджей ставит трек всем в комнате
+	const djPlay = async (track: MusicTrack) => {
+		setMusicOpen(false);
+		await loadAndPlay(track, 0, true);
+		socket.current?.emit('music:set', roomIDRef.current, track);
+	};
+
+	// Пауза/продолжить — с рассылкой позиции
+	const djToggle = async () => {
+		const s = soundRef.current;
+		if (!s) return;
+		const st: any = await s.getStatusAsync();
+		const next = !st.isPlaying;
+		if (next) await s.playAsync(); else await s.pauseAsync();
+		setMusicPlaying(next);
+		socket.current?.emit('music:control', roomIDRef.current, {
+			playing: next,
+			position: (st.positionMillis || 0) / 1000,
+		});
+	};
+
+	const djStop = async () => {
+		if (soundRef.current) {
+			try { await soundRef.current.unloadAsync(); } catch { }
+			soundRef.current = null;
+		}
+		setNowPlaying(null);
+		setMusicPlaying(false);
+		socket.current?.emit('music:stop', roomIDRef.current);
+	};
+
 	// Явная установка мута (используется и кнопкой, и кнопками громкости)
 	const applyMute = useCallback((next: boolean) => {
 		setIsMuted(prev => {
@@ -554,6 +644,14 @@ export default function InternetChatRoom() {
 	const stopAll = async () => {
 		if (activeInterval.current) clearInterval(activeInterval.current);
 		if (socket.current) socket.current.disconnect();
+
+		// Останавливаем музыку комнаты
+		if (soundRef.current) {
+			try { await soundRef.current.unloadAsync(); } catch { }
+			soundRef.current = null;
+		}
+		setNowPlaying(null);
+		setMusicPlaying(false);
 
 		// Микрофон освобождаем ПЕРВЫМ и без await до него: если что-то ниже
 		// упадёт (например notifee на iOS), индикатор записи всё равно погаснет.
@@ -680,6 +778,31 @@ export default function InternetChatRoom() {
 									/>
 								</View>
 
+								{/* Синхронная музыка комнаты */}
+								{nowPlaying ? (
+									<View className="flex-row items-center mb-3 p-3 bg-violet-500/10 border border-violet-500/40 rounded-2xl">
+										<Text className="text-lg mr-2">🎵</Text>
+										<View className="flex-1 mr-2">
+											<Text className="text-violet-200 font-bold text-xs" numberOfLines={1}>{nowPlaying.title}</Text>
+											<Text className="text-slate-400 text-[10px]" numberOfLines={1}>{nowPlaying.artist}</Text>
+										</View>
+										<TouchableOpacity onPress={djToggle} className="w-9 h-9 rounded-xl bg-violet-600 items-center justify-center mr-1.5">
+											<Text className="text-white text-sm">{musicPlaying ? '⏸' : '▶'}</Text>
+										</TouchableOpacity>
+										<TouchableOpacity onPress={() => setMusicOpen(true)} className="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 items-center justify-center mr-1.5">
+											<Text className="text-sm">🔍</Text>
+										</TouchableOpacity>
+										<TouchableOpacity onPress={djStop} className="w-9 h-9 rounded-xl bg-red-600 items-center justify-center">
+											<Text className="text-white text-sm">■</Text>
+										</TouchableOpacity>
+									</View>
+								) : (
+									<TouchableOpacity onPress={() => setMusicOpen(true)} className="flex-row items-center justify-center mb-3 p-3 bg-slate-900 border border-violet-500/30 rounded-2xl">
+										<Text className="text-base mr-2">🎵</Text>
+										<Text className="text-violet-300 font-bold text-[11px] uppercase">Поставить музыку на всех</Text>
+									</TouchableOpacity>
+								)}
+
 								<View className="flex-row items-end mb-4 gap-2">
 									<TextInput
 										multiline
@@ -715,6 +838,52 @@ export default function InternetChatRoom() {
 					</View>
 				</TouchableWithoutFeedback>
 			</KeyboardAvoidingView>
+
+			{/* Поиск музыки (Audius) */}
+			<Modal visible={musicOpen} transparent animationType="slide" onRequestClose={() => setMusicOpen(false)}>
+				<View className="flex-1 bg-black/60 justify-end">
+					<View className="bg-slate-900 rounded-t-3xl border-t border-violet-500/40 p-4 pb-8" style={{ maxHeight: '80%' }}>
+						<View className="items-center mb-2"><View className="w-10 h-1 bg-slate-700 rounded-full" /></View>
+						<View className="flex-row justify-between items-center mb-3">
+							<Text className="text-violet-400 font-bold uppercase text-xs tracking-widest">🎵 Музыка · Audius</Text>
+							<TouchableOpacity onPress={() => setMusicOpen(false)}><Text className="text-slate-500 font-bold px-2">✕</Text></TouchableOpacity>
+						</View>
+						<View className="flex-row gap-2 mb-3">
+							<TextInput
+								placeholder="Поиск трека или исполнителя"
+								placeholderTextColor="#475569"
+								className="flex-1 bg-slate-950 text-white p-3 rounded-2xl border border-slate-800"
+								value={musicQuery}
+								onChangeText={setMusicQuery}
+								onSubmitEditing={runMusicSearch}
+								returnKeyType="search"
+							/>
+							<TouchableOpacity onPress={runMusicSearch} className="px-4 rounded-2xl bg-violet-600 items-center justify-center">
+								<Text className="text-white font-bold text-xs">Найти</Text>
+							</TouchableOpacity>
+						</View>
+						{musicSearching ? (
+							<Text className="text-slate-500 text-xs text-center py-6">Ищу…</Text>
+						) : (
+							<FlatList
+								data={musicResults}
+								keyExtractor={(t) => t.id}
+								keyboardShouldPersistTaps="handled"
+								ListEmptyComponent={<Text className="text-slate-600 text-xs text-center py-6">Введите запрос и нажмите «Найти».</Text>}
+								renderItem={({ item }) => (
+									<TouchableOpacity onPress={() => djPlay(item)} className="flex-row items-center p-3 bg-slate-950 rounded-2xl border border-slate-800 mb-1.5">
+										<Text className="text-lg mr-3">▶</Text>
+										<View className="flex-1">
+											<Text className="text-white font-bold text-sm" numberOfLines={1}>{item.title}</Text>
+											<Text className="text-slate-500 text-[10px]" numberOfLines={1}>{item.artist}</Text>
+										</View>
+									</TouchableOpacity>
+								)}
+							/>
+						)}
+					</View>
+				</View>
+			</Modal>
 
 			<View className="absolute opacity-0 pointer-events-none">
 				{localStream.current && <RTCView streamURL={localStream.current.toURL()} style={{ width: 1, height: 1 }} />}

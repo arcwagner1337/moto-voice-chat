@@ -57,6 +57,11 @@ export function notifyUser(userId: number, event: string, payload: any) {
 // Хранилище истории голосовых комнат (как в старом сервере, в памяти)
 const roomsData: { [key: string]: any[] } = {};
 
+// Текущая музыка комнаты (синхронный плеер): трек + позиция на момент at.
+// Опоздавшие получают это при входе и подхватывают с нужной секунды.
+type RoomMusic = { track: any; playing: boolean; position: number; at: number };
+const roomMusic: { [key: string]: RoomMusic } = {};
+
 export function setupRealtime(server: Server) {
   io = server;
 
@@ -82,7 +87,32 @@ export function setupRealtime(server: Server) {
       if (!roomsData[roomId]) roomsData[roomId] = [];
       socket.emit('chat-history', roomsData[roomId]);
       socket.to(roomId).emit('user-joined', { id: socket.id, name: userName });
+      // Если в комнате уже играет музыка — отдаём состояние вошедшему
+      if (roomMusic[roomId]) socket.emit('music:set', roomMusic[roomId]);
       console.log(`👤 ${userName} зашел в комнату: ${roomId}`);
+    });
+
+    // ---------- Синхронный музыкальный плеер комнаты ----------
+
+    // Диджей поставил трек: сохраняем и рассылаем остальным в комнате
+    socket.on('music:set', (roomId: string, track: any) => {
+      roomMusic[roomId] = { track, playing: true, position: 0, at: Date.now() };
+      socket.to(roomId).emit('music:set', roomMusic[roomId]);
+    });
+
+    // Управление (play/pause/seek): обновляем состояние и релеим
+    socket.on('music:control', (roomId: string, data: any) => {
+      const st = roomMusic[roomId];
+      if (!st) return;
+      st.playing = !!data?.playing;
+      st.position = Number(data?.position) || 0;
+      st.at = Date.now();
+      socket.to(roomId).emit('music:control', { playing: st.playing, position: st.position, at: st.at });
+    });
+
+    socket.on('music:stop', (roomId: string) => {
+      delete roomMusic[roomId];
+      socket.to(roomId).emit('music:stop', {});
     });
 
     socket.on('chat', (roomId: string, msg: any) => {

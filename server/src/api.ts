@@ -997,3 +997,44 @@ api.post('/sos', requireAuth, (req, res) => {
   for (const t of targets) notifyUser(t, 'sos:alert', payload);
   res.json({ ok: true, sent: targets.length });
 });
+
+// ---------- Музыка (Audius, открытый API без ключа) ----------
+
+// Кэшируем список discovery-нод Audius (обновляем раз в час)
+let audiusHosts: string[] = [];
+let audiusHostsAt = 0;
+async function audiusHost(): Promise<string> {
+  if (Date.now() - audiusHostsAt > 3600_000 || audiusHosts.length === 0) {
+    const r = await fetch('https://api.audius.co', { signal: AbortSignal.timeout(8000) });
+    const j: any = await r.json();
+    audiusHosts = Array.isArray(j?.data) ? j.data : [];
+    audiusHostsAt = Date.now();
+  }
+  return audiusHosts[Math.floor(Math.random() * audiusHosts.length)] || 'https://discoveryprovider.audius.co';
+}
+
+// Поиск треков: возвращаем готовый stream URL для проигрывания в expo-av
+api.get('/music/search', requireAuth, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.json({ tracks: [] });
+  try {
+    const host = await audiusHost();
+    const url = `${host}/v1/tracks/search?query=${encodeURIComponent(q)}&app_name=meshvoice`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    const j: any = await r.json();
+    const tracks = (j?.data || [])
+      .filter((t: any) => t && !t.is_delete && t.is_streamable !== false)
+      .slice(0, 25)
+      .map((t: any) => ({
+        id: t.id,
+        title: t.title,
+        artist: t.user?.name || '',
+        duration: t.duration || 0,
+        artwork: t.artwork?.['150x150'] || null,
+        streamUrl: `${host}/v1/tracks/${t.id}/stream?app_name=meshvoice`,
+      }));
+    res.json({ tracks });
+  } catch {
+    res.status(502).json({ error: 'Поиск музыки недоступен' });
+  }
+});

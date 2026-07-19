@@ -226,6 +226,20 @@ export const getRoad = (
     `/route?from=${from.lat},${from.lng}&to=${to.lat},${to.lng}`
   );
 
+// ---------- Музыка (Audius) ----------
+
+export type MusicTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  duration: number;
+  artwork: string | null;
+  streamUrl: string;
+};
+
+export const searchMusic = (q: string) =>
+  request<{ tracks: MusicTrack[] }>(`/music/search?q=${encodeURIComponent(q)}`).then((d) => d.tracks);
+
 // ---------- SOS ----------
 
 export type SosAlert = {

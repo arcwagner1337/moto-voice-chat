@@ -1,6 +1,6 @@
 import { Stack, useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -32,6 +32,8 @@ import { useLiveLocation, GeoPoint } from '../../lib/useLiveLocation';
 import {
   startBackgroundTracking,
   stopBackgroundTracking,
+  startBackgroundTrackingSilent,
+  ensureBackgroundPermission,
   isBackgroundTrackingActive,
 } from '../../lib/backgroundLocation';
 import { MAP_HTML } from '../../lib/mapHtml';
@@ -143,6 +145,43 @@ export default function MapScreen() {
   useEffect(() => {
     userRef.current = user;
   }, [user]);
+
+  // Синхронные ref'ы для слушателя AppState (замыкание не видит свежий state)
+  const sharingRef = useRef(false);
+  useEffect(() => {
+    sharingRef.current = sharing;
+  }, [sharing]);
+  const bgTrackingRef = useRef(false);
+  useEffect(() => {
+    bgTrackingRef.current = bgTracking;
+  }, [bgTracking]);
+  // true — фоновый таск подняли мы автоматически (на время фона), а не тумблером.
+  const autoBgRef = useRef(false);
+
+  // Бесшовный фон: foreground-watcher (useLiveLocation) в фоне глохнет, поэтому
+  // при уходе в фон во время трансляции/записи/заезда молча поднимаем фоновый
+  // таск (если выдано разрешение «Всегда»), а при возврате — гасим его, чтобы не
+  // висела лишняя нотификация. Ручной тумблер «Фон» этим не трогаем.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      const goingBg = state === 'background' || state === 'inactive';
+      const needTracking =
+        sharingRef.current || recordingRef.current || activeRideRef.current != null;
+      if (goingBg) {
+        if (needTracking && !bgTrackingRef.current) {
+          startBackgroundTrackingSilent().then((started) => {
+            if (started) autoBgRef.current = true;
+          });
+        }
+      } else if (state === 'active') {
+        if (autoBgRef.current) {
+          autoBgRef.current = false;
+          stopBackgroundTracking();
+        }
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   // ---------- Карта ----------
 
@@ -405,14 +444,25 @@ export default function MapScreen() {
   // ---------- Действия ----------
 
   const toggleSharing = () => {
-    setSharing((v) => {
-      const next = !v;
-      (next
-        ? AsyncStorage.removeItem(SHARING_OFF_KEY)
-        : AsyncStorage.setItem(SHARING_OFF_KEY, '1')
-      ).catch(() => {});
-      return next;
-    });
+    const next = !sharingRef.current;
+    setSharing(next);
+    (next
+      ? AsyncStorage.removeItem(SHARING_OFF_KEY)
+      : AsyncStorage.setItem(SHARING_OFF_KEY, '1')
+    ).catch(() => {});
+    // Включая трансляцию — заранее просим разрешение «Всегда», чтобы позиция
+    // не пропадала в фоне (авто-хендофф поднимет таск молча). Если не выдали,
+    // мягко подсказываем; трансляция в foreground всё равно работает.
+    if (next) {
+      ensureBackgroundPermission().then((granted) => {
+        if (!granted) {
+          Alert.alert(
+            'Позиция в фоне',
+            'Чтобы трек не прерывался с погашенным экраном, разрешите геолокацию «Всегда» в настройках приложения. Сейчас позиция будет передаваться только пока приложение открыто.'
+          );
+        }
+      });
+    }
   };
 
   const toggleBgTracking = async () => {

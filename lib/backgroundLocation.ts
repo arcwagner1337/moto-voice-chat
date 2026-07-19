@@ -68,6 +68,52 @@ export async function startBackgroundTracking(): Promise<boolean> {
   return true;
 }
 
+// Есть ли уже выданное разрешение «Всегда» (фон) — без запроса диалога.
+export async function hasBackgroundPermission(): Promise<boolean> {
+  try {
+    const p = await Location.getBackgroundPermissionsAsync();
+    return p.status === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+// Запросить фон-разрешение заранее (в foreground, когда включают трансляцию),
+// чтобы потом авто-старт в фоне сработал молча. Возвращает, выдано ли.
+export async function ensureBackgroundPermission(): Promise<boolean> {
+  try {
+    const fg = await Location.requestForegroundPermissionsAsync();
+    if (fg.status !== 'granted') return false;
+    const bg = await Location.requestBackgroundPermissionsAsync();
+    return bg.status === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+// Молчаливый старт для авто-хендоффа при уходе в фон: без диалогов и алертов,
+// только если разрешение уже есть и таск ещё не запущен. Возвращает, стартовали ли.
+export async function startBackgroundTrackingSilent(): Promise<boolean> {
+  try {
+    if (!(await hasBackgroundPermission())) return false;
+    if (await Location.hasStartedLocationUpdatesAsync(BG_LOCATION_TASK)) return false;
+    await Location.startLocationUpdatesAsync(BG_LOCATION_TASK, {
+      accuracy: Location.Accuracy.BestForNavigation,
+      timeInterval: 5000,
+      distanceInterval: 10,
+      showsBackgroundLocationIndicator: true,
+      foregroundService: {
+        notificationTitle: '🏍️ MeshVoice — трекинг активен',
+        notificationBody: 'Позиция передаётся друзьям и в заезд. Выключается на вкладке MAP.',
+        notificationColor: '#22d3ee',
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function stopBackgroundTracking() {
   try {
     if (await Location.hasStartedLocationUpdatesAsync(BG_LOCATION_TASK)) {

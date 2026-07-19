@@ -989,7 +989,7 @@ export default function MapScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setFullMap((v) => !v)}
-              style={fullMap ? { top: insets.top + 12 } : undefined}
+              style={{ zIndex: 30, elevation: 30, ...(fullMap ? { top: insets.top + 12 } : {}) }}
               className={`absolute right-3 w-10 h-10 bg-slate-900/90 border border-cyan-500/50 rounded-xl items-center justify-center ${
                 fullMap ? '' : 'top-3'
               }`}
@@ -1091,7 +1091,7 @@ export default function MapScreen() {
             {roadNav && (
               <View
                 style={{ top: insets.top + 12 }}
-                className="absolute left-3 right-3 bg-slate-950/95 border border-sky-500/60 rounded-2xl p-3"
+                className="absolute left-3 right-16 bg-slate-950/95 border border-sky-500/60 rounded-2xl p-3"
               >
                 <View className="flex-row items-center">
                   <View className="flex-1">

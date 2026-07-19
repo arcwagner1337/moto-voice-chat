@@ -6,6 +6,7 @@ import {
   TextInput,
   TouchableOpacity,
   FlatList,
+  ScrollView,
   KeyboardAvoidingView,
   Alert,
   ActivityIndicator,
@@ -21,6 +22,7 @@ import {
   markChatRead,
   getFriends,
   addChatMembers,
+  removeChatMember,
   startChatCall,
 } from '../../lib/api';
 import { getSocialSocket } from '../../lib/socialSocket';
@@ -38,19 +40,23 @@ export default function ChatScreen() {
   const [loading, setLoading] = useState(true);
   const flatListRef = useRef<any>(null);
 
-  // Добавление друзей в группу
-  const [showAdd, setShowAdd] = useState(false);
+  // Меню участников группы: список + удаление + добавление
+  const [showMembers, setShowMembers] = useState(false);
   const [addable, setAddable] = useState<SocialUser[]>([]);
 
-  const openAddMembers = async () => {
+  const loadAddable = async (current: ChatSummary | null) => {
     try {
       const { friends } = await getFriends();
-      const memberIds = new Set((chat?.members || []).map((m) => m.id));
+      const memberIds = new Set((current?.members || []).map((m) => m.id));
       setAddable(friends.filter((f) => !memberIds.has(f.id)));
-      setShowAdd(true);
-    } catch (e) {
-      Alert.alert('Ошибка', (e as Error).message);
+    } catch {
+      setAddable([]);
     }
+  };
+
+  const openMembers = async () => {
+    setShowMembers(true);
+    loadAddable(chat);
   };
 
   const addMember = async (friend: SocialUser) => {
@@ -61,6 +67,34 @@ export default function ChatScreen() {
     } catch (e) {
       Alert.alert('Ошибка', (e as Error).message);
     }
+  };
+
+  const removeMember = (member: SocialUser) => {
+    const isSelf = member.id === me?.id;
+    Alert.alert(
+      isSelf ? 'Выйти из группы?' : `Удалить ${member.displayName}?`,
+      isSelf ? 'Вы покинете группу и чат исчезнет из списка.' : 'Участник больше не будет в группе.',
+      [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: isSelf ? 'Выйти' : 'Удалить',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const fresh = await removeChatMember(chatId, member.id);
+              if (isSelf || !fresh) {
+                router.back();
+                return;
+              }
+              setChat(fresh);
+              loadAddable(fresh);
+            } catch (e) {
+              Alert.alert('Ошибка', (e as Error).message);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const call = () => {
@@ -162,10 +196,10 @@ export default function ChatScreen() {
           </View>
           {chat?.type === 'group' && (
             <TouchableOpacity
-              onPress={openAddMembers}
+              onPress={() => (showMembers ? setShowMembers(false) : openMembers())}
               className="w-10 h-10 rounded-xl bg-slate-900 border border-cyan-500/40 items-center justify-center mr-2"
             >
-              <Text className="text-cyan-400 text-lg font-bold">＋</Text>
+              <Text className="text-base">👥</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity
@@ -176,36 +210,82 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Панель добавления друзей в группу */}
-        {showAdd && (
-          <View className="mx-4 mt-3 p-4 bg-slate-900 rounded-3xl border border-cyan-500/30">
-            <View className="flex-row justify-between items-center mb-2">
-              <Text className="text-cyan-400 font-bold uppercase text-[10px] tracking-widest">
-                Добавить в группу
-              </Text>
-              <TouchableOpacity onPress={() => setShowAdd(false)}>
-                <Text className="text-slate-500 font-bold px-2">✕</Text>
-              </TouchableOpacity>
-            </View>
-            {addable.length === 0 ? (
-              <Text className="text-slate-500 text-xs">Все ваши друзья уже в группе</Text>
-            ) : (
-              addable.map((f) => (
-                <TouchableOpacity
-                  key={f.id}
-                  onPress={() => addMember(f)}
-                  className="flex-row items-center p-3 bg-slate-950 rounded-2xl border border-slate-800 mb-1.5"
-                >
-                  <Text className="text-xl mr-3">{f.avatar}</Text>
-                  <View className="flex-1">
-                    <Text className="text-white font-bold text-sm">{f.displayName}</Text>
-                    <Text className="text-slate-500 font-mono text-[10px]">@{f.username}</Text>
-                  </View>
-                  <Text className="text-cyan-400 font-bold text-[10px] uppercase">＋ Добавить</Text>
+        {/* Меню участников группы: список (с удалением) + добавление друзей */}
+        {showMembers && chat?.type === 'group' && (
+          <ScrollView
+            className="mx-4 mt-3 max-h-[60%]"
+            contentContainerStyle={{ paddingBottom: 4 }}
+            showsVerticalScrollIndicator={false}
+          >
+            <View className="p-4 bg-slate-900 rounded-3xl border border-cyan-500/30">
+              <View className="flex-row justify-between items-center mb-3">
+                <Text className="text-cyan-400 font-bold uppercase text-[10px] tracking-widest">
+                  Участники · {chat.members.length}
+                </Text>
+                <TouchableOpacity onPress={() => setShowMembers(false)}>
+                  <Text className="text-slate-500 font-bold px-2">✕</Text>
                 </TouchableOpacity>
-              ))
-            )}
-          </View>
+              </View>
+
+              {chat.members.map((m) => {
+                const isOwner = m.id === chat.createdBy;
+                const isSelf = m.id === me?.id;
+                const iAmOwner = me?.id === chat.createdBy;
+                // Кнопка видна: создатель убирает любого (кроме себя-создателя),
+                // обычный участник может выйти сам.
+                const canRemove = !isOwner && (iAmOwner || isSelf);
+                return (
+                  <View
+                    key={m.id}
+                    className="flex-row items-center p-3 bg-slate-950 rounded-2xl border border-slate-800 mb-1.5"
+                  >
+                    <Text className="text-xl mr-3">{m.avatar}</Text>
+                    <View className="flex-1">
+                      <Text className="text-white font-bold text-sm">
+                        {m.displayName}
+                        {isSelf && ' (вы)'}
+                      </Text>
+                      <Text className="text-slate-500 font-mono text-[10px]">
+                        @{m.username}
+                        {isOwner && ' · создатель'}
+                        {m.online ? ' · online' : ''}
+                      </Text>
+                    </View>
+                    {canRemove && (
+                      <TouchableOpacity
+                        onPress={() => removeMember(m)}
+                        className="px-3 py-2 rounded-xl bg-slate-900 border border-red-500/40"
+                      >
+                        <Text className="text-[12px]">{isSelf ? '🚪' : '🗑'}</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })}
+
+              <Text className="text-cyan-400 font-bold uppercase text-[10px] tracking-widest mt-3 mb-2">
+                Добавить друга
+              </Text>
+              {addable.length === 0 ? (
+                <Text className="text-slate-500 text-xs">Все ваши друзья уже в группе</Text>
+              ) : (
+                addable.map((f) => (
+                  <TouchableOpacity
+                    key={f.id}
+                    onPress={() => addMember(f)}
+                    className="flex-row items-center p-3 bg-slate-950 rounded-2xl border border-slate-800 mb-1.5"
+                  >
+                    <Text className="text-xl mr-3">{f.avatar}</Text>
+                    <View className="flex-1">
+                      <Text className="text-white font-bold text-sm">{f.displayName}</Text>
+                      <Text className="text-slate-500 font-mono text-[10px]">@{f.username}</Text>
+                    </View>
+                    <Text className="text-cyan-400 font-bold text-[10px] uppercase">＋ Добавить</Text>
+                  </TouchableOpacity>
+                ))
+              )}
+            </View>
+          </ScrollView>
         )}
 
         {/* Сообщения */}

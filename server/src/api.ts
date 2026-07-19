@@ -225,6 +225,7 @@ function chatInfo(chatId: number, forUserId: number) {
     type: chat.type,
     title,
     avatar,
+    createdBy: chat.created_by,
     unread: unreadRow?.c || 0,
     members: members.map((m) => ({ ...publicUser(m), online: isOnline(m.id) })),
     lastMessage: last
@@ -334,6 +335,31 @@ api.post('/chats/:id/members', requireAuth, (req, res) => {
   const members: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
   for (const m of members) notifyUser(m.user_id, 'chats:update', {});
   res.json({ chat: chatInfo(chatId, userId) });
+});
+
+// Удалить участника из группы. Создатель может убрать любого; любой участник
+// может выйти сам (удалить себя). Создателя убрать нельзя.
+api.delete('/chats/:id/members/:userId', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const chatId = Number(req.params.id);
+  const targetId = Number(req.params.userId);
+  const chat: any = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+  if (!chat || !isChatMember(chatId, userId)) return res.status(403).json({ error: 'Нет доступа' });
+  if (chat.type !== 'group') return res.status(400).json({ error: 'Только для групп' });
+  if (!targetId || !isChatMember(chatId, targetId))
+    return res.status(404).json({ error: 'Участник не найден' });
+  if (targetId === chat.created_by)
+    return res.status(400).json({ error: 'Нельзя удалить создателя группы' });
+  const isOwner = userId === chat.created_by;
+  if (!isOwner && targetId !== userId)
+    return res.status(403).json({ error: 'Удалять участников может только создатель группы' });
+
+  db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(chatId, targetId);
+  // Оповещаем оставшихся и самого удалённого (у него чат пропадёт из списка).
+  const members: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+  for (const m of members) notifyUser(m.user_id, 'chats:update', {});
+  notifyUser(targetId, 'chats:update', {});
+  res.json({ chat: isChatMember(chatId, userId) ? chatInfo(chatId, userId) : null });
 });
 
 // Звонок в чате: участникам уходит realtime-событие «входящий звонок»

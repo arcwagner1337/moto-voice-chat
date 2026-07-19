@@ -18,6 +18,7 @@ export type ChatSummary = {
   type: 'dm' | 'group';
   title: string;
   avatar: string;
+  createdBy?: number;
   unread?: number;
   members: SocialUser[];
   lastMessage: { text: string; senderName: string; createdAt: number } | null;
@@ -189,6 +190,13 @@ export const addChatMembers = (chatId: number, memberIds: number[]) =>
   request<{ chat: ChatSummary }>(`/chats/${chatId}/members`, {
     method: 'POST',
     body: { memberIds },
+  }).then((d) => d.chat);
+
+// Удалить участника из группы (или выйти самому). Возвращает обновлённый чат,
+// либо null, если удалили себя.
+export const removeChatMember = (chatId: number, userId: number) =>
+  request<{ chat: ChatSummary | null }>(`/chats/${chatId}/members/${userId}`, {
+    method: 'DELETE',
   }).then((d) => d.chat);
 
 // «Звонок»: другим участникам чата прилетает уведомление с приглашением

@@ -77,6 +77,7 @@ export default function MapScreen() {
 
   const [user, setUser] = useState<SocialUser | null>(null);
   const [fullMap, setFullMap] = useState(false);
+  const [mapLayer, setMapLayer] = useState<'dark' | 'satellite'>('dark');
   const [sharing, setSharing] = useState(false);
   const [bgTracking, setBgTracking] = useState(false);
   const [myPos, setMyPos] = useState<GeoPoint | null>(null);
@@ -117,6 +118,13 @@ export default function MapScreen() {
     editingRef.current = editingTrack;
     webRef.current?.injectJavaScript(`window.setTapMode && window.setTapMode(${editingTrack}); true;`);
   }, [editingTrack]);
+
+  // Базовый слой карты: тёмная схема или спутник
+  useEffect(() => {
+    webRef.current?.injectJavaScript(
+      `window.setBaseLayer && window.setBaseLayer(${JSON.stringify(mapLayer)}); true;`
+    );
+  }, [mapLayer]);
 
   const activeRideRef = useRef<RideInfo | null>(null);
   useEffect(() => {
@@ -640,6 +648,11 @@ export default function MapScreen() {
               onLoadEnd={() => {
                 pushMarkers();
                 pushTrack();
+                if (mapLayer !== 'dark') {
+                  webRef.current?.injectJavaScript(
+                    `window.setBaseLayer && window.setBaseLayer(${JSON.stringify(mapLayer)}); true;`
+                  );
+                }
               }}
               style={{ backgroundColor: '#020617' }}
             />
@@ -648,6 +661,12 @@ export default function MapScreen() {
               className="absolute bottom-3 right-3 w-10 h-10 bg-slate-900/90 border border-cyan-500/50 rounded-xl items-center justify-center"
             >
               <Text className="text-base">🎯</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setMapLayer((v) => (v === 'dark' ? 'satellite' : 'dark'))}
+              className="absolute bottom-3 left-3 w-10 h-10 bg-slate-900/90 border border-cyan-500/50 rounded-xl items-center justify-center"
+            >
+              <Text className="text-base">{mapLayer === 'dark' ? '🛰' : '🗺'}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setFullMap((v) => !v)}

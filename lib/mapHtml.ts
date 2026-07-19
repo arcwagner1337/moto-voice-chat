@@ -30,10 +30,37 @@ export const MAP_HTML = `<!DOCTYPE html>
 <div id="map"></div>
 <script>
   var map = L.map('map', { zoomControl: false }).setView([55.751, 37.618], 12);
-  L.tileLayer('https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+
+  // Два базовых слоя: тёмная схема (по умолчанию) и спутник (Esri, без ключа).
+  var darkLayer = L.tileLayer('https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 19,
     attribution: '&copy; OSM &copy; CARTO'
-  }).addTo(map);
+  });
+  var satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19,
+    attribution: '&copy; Esri, Maxar, Earthstar Geographics'
+  });
+  // Подписи (названия, дороги) поверх спутника — иначе на снимке не сориентироваться.
+  var satLabels = L.tileLayer('https://basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19, opacity: 0.9
+  });
+  darkLayer.addTo(map);
+
+  var baseKind = 'dark';
+  function setBaseLayer(kind) {
+    if (kind === baseKind) return;
+    if (kind === 'satellite') {
+      map.removeLayer(darkLayer);
+      satLayer.addTo(map);
+      satLabels.addTo(map);
+    } else {
+      map.removeLayer(satLayer);
+      map.removeLayer(satLabels);
+      darkLayer.addTo(map);
+    }
+    baseKind = kind;
+  }
+  window.setBaseLayer = setBaseLayer;
 
   var markers = {};
   var didCenter = false;

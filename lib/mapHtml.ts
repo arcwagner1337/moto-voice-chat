@@ -31,33 +31,37 @@ export const MAP_HTML = `<!DOCTYPE html>
 <script>
   var map = L.map('map', { zoomControl: false }).setView([55.751, 37.618], 12);
 
-  // Два базовых слоя: тёмная схема (по умолчанию) и спутник (Esri, без ключа).
+  // Базовые слои (все без API-ключа): тёмная/светлая схемы Carto, спутник Esri,
+  // и подписи поверх снимка для гибрида.
   var darkLayer = L.tileLayer('https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19,
-    attribution: '&copy; OSM &copy; CARTO'
+    maxZoom: 19, attribution: '&copy; OSM &copy; CARTO'
+  });
+  var lightLayer = L.tileLayer('https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19, attribution: '&copy; OSM &copy; CARTO'
   });
   var satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 19,
-    attribution: '&copy; Esri, Maxar, Earthstar Geographics'
+    maxZoom: 19, attribution: '&copy; Esri, Maxar, Earthstar Geographics'
   });
-  // Подписи (названия, дороги) поверх спутника — иначе на снимке не сориентироваться.
+  // Подписи (названия, дороги) поверх спутника для гибрида.
   var satLabels = L.tileLayer('https://basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
     maxZoom: 19, opacity: 0.9
   });
   darkLayer.addTo(map);
 
+  // Какие тайл-слои показывать для каждого режима
+  var LAYER_SETS = {
+    dark: [darkLayer],
+    light: [lightLayer],
+    satellite: [satLayer],
+    hybrid: [satLayer, satLabels],
+  };
   var baseKind = 'dark';
   function setBaseLayer(kind) {
-    if (kind === baseKind) return;
-    if (kind === 'satellite') {
-      map.removeLayer(darkLayer);
-      satLayer.addTo(map);
-      satLabels.addTo(map);
-    } else {
-      map.removeLayer(satLayer);
-      map.removeLayer(satLabels);
-      darkLayer.addTo(map);
-    }
+    if (kind === baseKind || !LAYER_SETS[kind]) return;
+    [darkLayer, lightLayer, satLayer, satLabels].forEach(function (l) {
+      if (map.hasLayer(l)) map.removeLayer(l);
+    });
+    LAYER_SETS[kind].forEach(function (l) { l.addTo(map); });
     baseKind = kind;
   }
   window.setBaseLayer = setBaseLayer;

@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS messages (
   chat_id    INTEGER NOT NULL REFERENCES chats(id),
   sender_id  INTEGER NOT NULL REFERENCES users(id),
   text       TEXT    NOT NULL,
+  reply_to   INTEGER REFERENCES messages(id),
+  edited_at  INTEGER,
   created_at INTEGER NOT NULL
 );
 
@@ -107,6 +109,8 @@ const migrations = [
   'ALTER TABLE ride_members ADD COLUMN last_lng REAL',
   'ALTER TABLE ride_members ADD COLUMN last_ts INTEGER',
   'ALTER TABLE ride_members ADD COLUMN path TEXT',
+  'ALTER TABLE messages ADD COLUMN reply_to INTEGER',
+  'ALTER TABLE messages ADD COLUMN edited_at INTEGER',
 ];
 for (const m of migrations) {
   try {

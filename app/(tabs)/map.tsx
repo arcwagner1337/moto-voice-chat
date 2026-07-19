@@ -45,6 +45,11 @@ const SHARING_OFF_KEY = '@map_sharing_off';
 const TRACK_COLORS = ['#22d3ee', '#f472b6', '#a3e635', '#fbbf24', '#a78bfa', '#fb7185', '#34d399', '#60a5fa'];
 const colorForUser = (id: number) => TRACK_COLORS[Math.abs(id) % TRACK_COLORS.length];
 
+// Слои карты по кругу: тёмная → спутник → гибрид → светлая
+type MapLayer = 'dark' | 'satellite' | 'hybrid' | 'light';
+const LAYER_ORDER: MapLayer[] = ['dark', 'satellite', 'hybrid', 'light'];
+const LAYER_ICON: Record<MapLayer, string> = { dark: '🌙', satellite: '🛰', hybrid: '🌐', light: '☀️' };
+
 // Минимальный сдвиг между точками записи маршрута (прореживание), метры
 const REC_MIN_METERS = 12;
 function metersBetween(a: TrackPoint, b: TrackPoint): number {
@@ -120,7 +125,7 @@ export default function MapScreen() {
 
   const [user, setUser] = useState<SocialUser | null>(null);
   const [fullMap, setFullMap] = useState(false);
-  const [mapLayer, setMapLayer] = useState<'dark' | 'satellite'>('dark');
+  const [mapLayer, setMapLayer] = useState<MapLayer>('dark');
   const [sharing, setSharing] = useState(false);
   const [bgTracking, setBgTracking] = useState(false);
   const [myPos, setMyPos] = useState<GeoPoint | null>(null);
@@ -806,10 +811,12 @@ export default function MapScreen() {
               <Text className="text-base">🎯</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={() => setMapLayer((v) => (v === 'dark' ? 'satellite' : 'dark'))}
+              onPress={() =>
+                setMapLayer((v) => LAYER_ORDER[(LAYER_ORDER.indexOf(v) + 1) % LAYER_ORDER.length])
+              }
               className="absolute bottom-3 left-3 w-10 h-10 bg-slate-900/90 border border-cyan-500/50 rounded-xl items-center justify-center"
             >
-              <Text className="text-base">{mapLayer === 'dark' ? '🛰' : '🗺'}</Text>
+              <Text className="text-base">{LAYER_ICON[mapLayer]}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setFullMap((v) => !v)}

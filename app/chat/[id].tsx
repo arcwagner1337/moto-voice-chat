@@ -10,6 +10,10 @@ import {
   KeyboardAvoidingView,
   Alert,
   ActivityIndicator,
+  Modal,
+  Animated,
+  PanResponder,
+  Linking,
 } from 'react-native';
 import {
   ChatMessage,
@@ -19,6 +23,8 @@ import {
   getChat,
   getMessages,
   sendChatMessage,
+  editChatMessage,
+  deleteChatMessage,
   markChatRead,
   getFriends,
   addChatMembers,
@@ -39,6 +45,53 @@ export default function ChatScreen() {
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const flatListRef = useRef<any>(null);
+
+  // Ответ / редактирование / контекстное меню
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
+  const [editing, setEditing] = useState<ChatMessage | null>(null);
+  const [menuMsg, setMenuMsg] = useState<ChatMessage | null>(null);
+
+  const scrollToEnd = useCallback((animated = true) => {
+    requestAnimationFrame(() => flatListRef.current?.scrollToEnd({ animated }));
+  }, []);
+
+  const startReply = (msg: ChatMessage) => {
+    setEditing(null);
+    setReplyingTo(msg);
+    setMenuMsg(null);
+  };
+
+  const startEdit = (msg: ChatMessage) => {
+    setReplyingTo(null);
+    setEditing(msg);
+    setText(msg.text);
+    setMenuMsg(null);
+  };
+
+  const cancelCompose = () => {
+    setReplyingTo(null);
+    setEditing(null);
+    setText('');
+  };
+
+  const deleteMessage = (msg: ChatMessage) => {
+    setMenuMsg(null);
+    Alert.alert('Удалить сообщение?', 'Оно исчезнет у всех участников.', [
+      { text: 'Отмена', style: 'cancel' },
+      {
+        text: 'Удалить',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteChatMessage(chatId, msg.id);
+            setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+          } catch (e) {
+            Alert.alert('Ошибка', (e as Error).message);
+          }
+        },
+      },
+    ]);
+  };
 
   // Меню участников группы: список + удаление + добавление
   const [showMembers, setShowMembers] = useState(false);
@@ -113,6 +166,22 @@ export default function ChatScreen() {
     [chatId]
   );
 
+  const onEdited = useCallback(
+    (msg: ChatMessage) => {
+      if (msg.chatId !== chatId) return;
+      setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)));
+    },
+    [chatId]
+  );
+
+  const onDeleted = useCallback(
+    (d: { chatId: number; id: number }) => {
+      if (d.chatId !== chatId) return;
+      setMessages((prev) => prev.filter((m) => m.id !== d.id));
+    },
+    [chatId]
+  );
+
   useEffect(() => {
     let active = true;
     let sock: any = null;
@@ -138,26 +207,46 @@ export default function ChatScreen() {
         return;
       }
       sock = await getSocialSocket();
-      if (sock && active) sock.on('chat:new', onNew);
+      if (sock && active) {
+        sock.on('chat:new', onNew);
+        sock.on('chat:edited', onEdited);
+        sock.on('chat:deleted', onDeleted);
+      }
     })();
 
     return () => {
       active = false;
       setOpenChat(0);
-      if (sock) sock.off('chat:new', onNew);
+      if (sock) {
+        sock.off('chat:new', onNew);
+        sock.off('chat:edited', onEdited);
+        sock.off('chat:deleted', onDeleted);
+      }
     };
-  }, [chatId, onNew]);
+  }, [chatId, onNew, onEdited, onDeleted]);
 
   const send = async () => {
     const t = text.trim();
     if (!t || sending) return;
+    const editingMsg = editing;
+    const replyMsg = replyingTo;
     setSending(true);
     setText('');
+    setEditing(null);
+    setReplyingTo(null);
     try {
-      const msg = await sendChatMessage(chatId, t);
-      setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      if (editingMsg) {
+        const msg = await editChatMessage(chatId, editingMsg.id, t);
+        setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)));
+      } else {
+        const msg = await sendChatMessage(chatId, t, replyMsg?.id);
+        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        scrollToEnd();
+      }
     } catch (e) {
       setText(t);
+      if (editingMsg) setEditing(editingMsg);
+      else setReplyingTo(replyMsg);
       Alert.alert('Ошибка', (e as Error).message);
     } finally {
       setSending(false);
@@ -308,33 +397,41 @@ export default function ChatScreen() {
               </View>
             )
           }
-          renderItem={({ item }) => {
-            const mine = item.sender.id === me?.id;
-            return (
-              <View className={`mb-3 max-w-[80%] ${mine ? 'self-end items-end' : 'self-start items-start'}`}>
-                {!mine && (
-                  <Text className="text-slate-500 text-[9px] mb-1 font-bold">
-                    {item.sender.avatar} {item.sender.displayName}
-                  </Text>
-                )}
-                <View
-                  className={`p-3 rounded-2xl ${mine ? 'bg-cyan-700 rounded-tr-none' : 'bg-slate-800 rounded-tl-none'}`}
-                >
-                  <Text className="text-white text-sm">{item.text}</Text>
-                  <Text className={`text-[8px] mt-1 ${mine ? 'text-cyan-300' : 'text-slate-500'}`}>
-                    {fmtTime(item.createdAt)}
-                  </Text>
-                </View>
-              </View>
-            );
-          }}
+          renderItem={({ item }) => (
+            <MessageBubble
+              message={item}
+              mine={item.sender.id === me?.id}
+              showSender={chat?.type === 'group' && item.sender.id !== me?.id}
+              fmtTime={fmtTime}
+              onReply={() => startReply(item)}
+              onOpenMenu={() => setMenuMsg(item)}
+            />
+          )}
         />
+
+        {/* Плашка «отвечаю на…» / «редактирую» */}
+        {(replyingTo || editing) && (
+          <View className="flex-row items-center mx-4 mb-1 px-3 py-2 bg-slate-900 border-l-2 border-cyan-500 rounded-lg">
+            <Text className="text-base mr-2">{editing ? '✏️' : '↩️'}</Text>
+            <View className="flex-1">
+              <Text className="text-cyan-400 text-[10px] font-bold">
+                {editing ? 'Редактирование' : `Ответ · ${replyingTo?.sender.displayName}`}
+              </Text>
+              <Text className="text-slate-400 text-xs" numberOfLines={1}>
+                {(editing || replyingTo)?.text}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={cancelCompose} className="px-2">
+              <Text className="text-slate-500 font-bold">✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Ввод */}
         <View className="flex-row items-end p-4 pt-2 gap-2">
           <TextInput
             multiline
-            placeholder="Сообщение..."
+            placeholder={editing ? 'Изменить сообщение...' : 'Сообщение...'}
             placeholderTextColor="#475569"
             className="flex-1 bg-slate-900 text-white p-4 py-3 rounded-2xl border border-slate-800 min-h-[52px] max-h-32"
             value={text}
@@ -343,12 +440,170 @@ export default function ChatScreen() {
           <TouchableOpacity
             onPress={send}
             disabled={sending}
-            className={`h-14 w-14 rounded-2xl items-center justify-center ${sending ? 'bg-slate-700' : 'bg-cyan-600'}`}
+            className={`h-14 w-14 rounded-2xl items-center justify-center ${sending ? 'bg-slate-700' : editing ? 'bg-emerald-600' : 'bg-cyan-600'}`}
           >
-            <Text className="text-white text-xl">🚀</Text>
+            <Text className="text-white text-xl">{editing ? '✓' : '🚀'}</Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {/* Контекстное меню сообщения */}
+      <Modal
+        visible={!!menuMsg}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuMsg(null)}
+      >
+        <TouchableOpacity
+          className="flex-1 bg-black/50 justify-end"
+          activeOpacity={1}
+          onPress={() => setMenuMsg(null)}
+        >
+          <View className="bg-slate-900 rounded-t-3xl p-4 pb-8 border-t border-slate-700">
+            {menuMsg && (
+              <>
+                <View className="items-center mb-2">
+                  <View className="w-10 h-1 bg-slate-700 rounded-full mb-3" />
+                  <Text className="text-slate-400 text-xs" numberOfLines={2}>
+                    {menuMsg.text}
+                  </Text>
+                </View>
+                <MenuAction icon="↩️" label="Ответить" onPress={() => startReply(menuMsg)} />
+                {menuMsg.sender.id === me?.id && (
+                  <MenuAction icon="✏️" label="Изменить" onPress={() => startEdit(menuMsg)} />
+                )}
+                {menuMsg.sender.id === me?.id && (
+                  <MenuAction icon="🗑" label="Удалить" danger onPress={() => deleteMessage(menuMsg)} />
+                )}
+              </>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </View>
+  );
+}
+
+// Одна строка действия в контекстном меню
+function MenuAction({
+  icon,
+  label,
+  danger,
+  onPress,
+}: {
+  icon: string;
+  label: string;
+  danger?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      className="flex-row items-center p-4 rounded-2xl bg-slate-950 border border-slate-800 mb-1.5"
+    >
+      <Text className="text-lg mr-3">{icon}</Text>
+      <Text className={`font-bold text-sm ${danger ? 'text-rose-400' : 'text-white'}`}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+// Текст с кликабельными ссылками (открываются во внешнем приложении)
+const URL_SPLIT_RE = /((?:https?:\/\/|www\.)[^\s]+)/gi;
+const isUrl = (s: string) => /^(?:https?:\/\/|www\.)/i.test(s);
+function MessageText({ text, mine }: { text: string; mine: boolean }) {
+  const parts = text.split(URL_SPLIT_RE);
+  return (
+    <Text className="text-white text-sm">
+      {parts.map((part, i) => {
+        if (part && isUrl(part)) {
+          const url = part.startsWith('http') ? part : `https://${part}`;
+          return (
+            <Text
+              key={i}
+              className={mine ? 'text-cyan-200 underline' : 'text-cyan-400 underline'}
+              onPress={() => Linking.openURL(url).catch(() => {})}
+            >
+              {part}
+            </Text>
+          );
+        }
+        return <Text key={i}>{part}</Text>;
+      })}
+    </Text>
+  );
+}
+
+// Пузырь сообщения: свайп-вправо → ответ, тап → контекстное меню
+function MessageBubble({
+  message,
+  mine,
+  showSender,
+  fmtTime,
+  onReply,
+  onOpenMenu,
+}: {
+  message: ChatMessage;
+  mine: boolean;
+  showSender: boolean;
+  fmtTime: (ts: number) => string;
+  onReply: () => void;
+  onOpenMenu: () => void;
+}) {
+  const tx = useRef(new Animated.Value(0)).current;
+  const pan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => g.dx > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onPanResponderMove: (_e, g) => {
+        if (g.dx > 0) tx.setValue(Math.min(g.dx, 72));
+      },
+      onPanResponderRelease: (_e, g) => {
+        if (g.dx > 56) onReply();
+        Animated.spring(tx, { toValue: 0, useNativeDriver: true }).start();
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(tx, { toValue: 0, useNativeDriver: true }).start();
+      },
+    })
+  ).current;
+
+  return (
+    <View className="mb-3" {...pan.panHandlers}>
+      {/* индикатор ответа при свайпе */}
+      <Animated.View
+        style={{ opacity: tx.interpolate({ inputRange: [0, 40], outputRange: [0, 1] }) }}
+        className="absolute left-1 top-1/2"
+      >
+        <Text className="text-cyan-400 text-base">↩️</Text>
+      </Animated.View>
+      <Animated.View
+        style={{ transform: [{ translateX: tx }] }}
+        className={`max-w-[80%] ${mine ? 'self-end items-end' : 'self-start items-start'}`}
+      >
+        {showSender && (
+          <Text className="text-slate-500 text-[9px] mb-1 font-bold">
+            {message.sender.avatar} {message.sender.displayName}
+          </Text>
+        )}
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={onOpenMenu}
+          className={`p-3 rounded-2xl ${mine ? 'bg-cyan-700 rounded-tr-none' : 'bg-slate-800 rounded-tl-none'}`}
+        >
+          {message.replyTo && (
+            <View className="border-l-2 border-cyan-300/70 pl-2 mb-1.5 opacity-90">
+              <Text className="text-cyan-200 text-[10px] font-bold">{message.replyTo.senderName}</Text>
+              <Text className="text-slate-200 text-[11px]" numberOfLines={1}>
+                {message.replyTo.text}
+              </Text>
+            </View>
+          )}
+          <MessageText text={message.text} mine={mine} />
+          <Text className={`text-[8px] mt-1 ${mine ? 'text-cyan-300' : 'text-slate-500'}`}>
+            {message.editedAt ? 'изм. · ' : ''}
+            {fmtTime(message.createdAt)}
+          </Text>
+        </TouchableOpacity>
+      </Animated.View>
     </View>
   );
 }

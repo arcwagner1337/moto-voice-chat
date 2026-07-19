@@ -4,10 +4,14 @@ import { Stack, router } from "expo-router";
 import { View } from 'react-native';
 import { useEffect } from 'react';
 import notifee, { EventType } from '@notifee/react-native';
-import { initMessageNotifications } from '../lib/notifications';
+import { initMessageNotifications, handleNotificationEvent } from '../lib/notifications';
 // Регистрация фонового таска геолокации — обязана произойти при старте
 // приложения, в том числе когда Android будит его в фоне ради координат
 import '../lib/backgroundLocation';
+
+// Фоновая обработка нажатий на уведомления (быстрый ответ из шторки, когда
+// приложение в фоне/убито). Регистрируется на уровне модуля — до рендера.
+notifee.onBackgroundEvent(handleNotificationEvent);
 
 export const unstable_settings = {
   initialRouteName: "(tabs)",
@@ -33,8 +37,11 @@ function AppContent() {
       }
     };
 
-    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
+    const unsubscribe = notifee.onForegroundEvent((event) => {
+      const { type, detail } = event;
       if (type === EventType.PRESS) openFromNotification(detail.notification?.data);
+      // Быстрый ответ из шторки, пока приложение открыто
+      if (type === EventType.ACTION_PRESS) handleNotificationEvent(event);
     });
 
     // Приложение открыто нажатием на уведомление из фона

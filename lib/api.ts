@@ -24,11 +24,15 @@ export type ChatSummary = {
   lastMessage: { text: string; senderName: string; createdAt: number } | null;
 };
 
+export type ReplyPreview = { id: number; text: string; senderName: string };
+
 export type ChatMessage = {
   id: number;
   chatId: number;
   text: string;
   createdAt: number;
+  editedAt?: number | null;
+  replyTo?: ReplyPreview | null;
   sender: SocialUser;
 };
 
@@ -177,11 +181,20 @@ export const getMessages = (chatId: number, before?: number) =>
     `/chats/${chatId}/messages${before ? `?before=${before}` : ''}`
   ).then((d) => d.messages);
 
-export const sendChatMessage = (chatId: number, text: string) =>
+export const sendChatMessage = (chatId: number, text: string, replyTo?: number) =>
   request<{ message: ChatMessage }>(`/chats/${chatId}/messages`, {
     method: 'POST',
+    body: { text, ...(replyTo ? { replyTo } : {}) },
+  }).then((d) => d.message);
+
+export const editChatMessage = (chatId: number, msgId: number, text: string) =>
+  request<{ message: ChatMessage }>(`/chats/${chatId}/messages/${msgId}`, {
+    method: 'PATCH',
     body: { text },
   }).then((d) => d.message);
+
+export const deleteChatMessage = (chatId: number, msgId: number) =>
+  request(`/chats/${chatId}/messages/${msgId}`, { method: 'DELETE' });
 
 export const markChatRead = (chatId: number, lastId: number) =>
   request(`/chats/${chatId}/read`, { method: 'POST', body: { lastId } }).catch(() => {});

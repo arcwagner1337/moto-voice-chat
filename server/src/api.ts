@@ -763,6 +763,34 @@ api.delete('/routes/:id', requireAuth, (req, res) => {
 
 // ---------- Сообщения ----------
 
+// Общий SELECT с автором и превью цитируемого сообщения (reply_to)
+const MESSAGE_SELECT = `
+  SELECT m.*, u.username, u.display_name, u.avatar,
+         rm.text AS reply_text, ru.display_name AS reply_sender
+  FROM messages m
+  JOIN users u ON u.id = m.sender_id
+  LEFT JOIN messages rm ON rm.id = m.reply_to
+  LEFT JOIN users ru ON ru.id = rm.sender_id`;
+
+function messagePayload(r: any) {
+  return {
+    id: r.id,
+    chatId: r.chat_id,
+    text: r.text,
+    createdAt: r.created_at,
+    editedAt: r.edited_at || null,
+    replyTo: r.reply_to
+      ? { id: r.reply_to, text: r.reply_text ?? '', senderName: r.reply_sender ?? '' }
+      : null,
+    sender: { id: r.sender_id, username: r.username, displayName: r.display_name, avatar: r.avatar },
+  };
+}
+
+function loadMessage(msgId: number) {
+  const r: any = db.prepare(MESSAGE_SELECT + ' WHERE m.id = ?').get(msgId);
+  return r ? messagePayload(r) : null;
+}
+
 api.get('/chats/:id/messages', requireAuth, (req, res) => {
   const userId = (req as AuthedRequest).userId;
   const chatId = Number(req.params.id);
@@ -771,23 +799,10 @@ api.get('/chats/:id/messages', requireAuth, (req, res) => {
   const before = Number(req.query.before) || Number.MAX_SAFE_INTEGER;
   const limit = Math.min(Number(req.query.limit) || 50, 100);
   const rows: any[] = db
-    .prepare(
-      `SELECT m.*, u.username, u.display_name, u.avatar FROM messages m
-       JOIN users u ON u.id = m.sender_id
-       WHERE m.chat_id = ? AND m.id < ?
-       ORDER BY m.id DESC LIMIT ?`
-    )
+    .prepare(MESSAGE_SELECT + ' WHERE m.chat_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?')
     .all(chatId, before, limit);
 
-  res.json({
-    messages: rows.reverse().map((r) => ({
-      id: r.id,
-      chatId,
-      text: r.text,
-      createdAt: r.created_at,
-      sender: { id: r.sender_id, username: r.username, displayName: r.display_name, avatar: r.avatar },
-    })),
-  });
+  res.json({ messages: rows.reverse().map(messagePayload) });
 });
 
 api.post('/chats/:id/messages', requireAuth, (req, res) => {
@@ -797,18 +812,18 @@ api.post('/chats/:id/messages', requireAuth, (req, res) => {
   const text = String(req.body?.text || '').trim();
   if (!text) return res.status(400).json({ error: 'Пустое сообщение' });
 
-  const result = db
-    .prepare('INSERT INTO messages (chat_id, sender_id, text, created_at) VALUES (?, ?, ?, ?)')
-    .run(chatId, userId, text.slice(0, 2000), now());
+  // reply_to принимаем только если это сообщение из этого же чата
+  let replyTo: number | null = Number(req.body?.replyTo) || null;
+  if (replyTo) {
+    const src: any = db.prepare('SELECT chat_id FROM messages WHERE id = ?').get(replyTo);
+    if (!src || src.chat_id !== chatId) replyTo = null;
+  }
 
-  const sender = getUserById(userId) as PublicUser;
-  const message = {
-    id: Number(result.lastInsertRowid),
-    chatId,
-    text: text.slice(0, 2000),
-    createdAt: now(),
-    sender,
-  };
+  const result = db
+    .prepare('INSERT INTO messages (chat_id, sender_id, text, reply_to, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(chatId, userId, text.slice(0, 2000), replyTo, now());
+
+  const message = loadMessage(Number(result.lastInsertRowid));
 
   // Realtime-доставка всем участникам (включая другие устройства отправителя)
   const members: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
@@ -816,4 +831,53 @@ api.post('/chats/:id/messages', requireAuth, (req, res) => {
     notifyUser(m.user_id, 'chat:new', message);
   }
   res.json({ message });
+});
+
+// Редактирование своего сообщения
+api.patch('/chats/:id/messages/:msgId', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const chatId = Number(req.params.id);
+  const msgId = Number(req.params.msgId);
+  if (!isChatMember(chatId, userId)) return res.status(403).json({ error: 'Нет доступа' });
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Пустое сообщение' });
+
+  const msg: any = db.prepare('SELECT sender_id, chat_id FROM messages WHERE id = ?').get(msgId);
+  if (!msg || msg.chat_id !== chatId) return res.status(404).json({ error: 'Сообщение не найдено' });
+  if (msg.sender_id !== userId) return res.status(403).json({ error: 'Можно менять только свои сообщения' });
+
+  db.prepare('UPDATE messages SET text = ?, edited_at = ? WHERE id = ?').run(
+    text.slice(0, 2000),
+    now(),
+    msgId
+  );
+  const message = loadMessage(msgId);
+  const members: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+  for (const m of members) {
+    notifyUser(m.user_id, 'chat:edited', message);
+    notifyUser(m.user_id, 'chats:update', {});
+  }
+  res.json({ message });
+});
+
+// Удаление своего сообщения
+api.delete('/chats/:id/messages/:msgId', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const chatId = Number(req.params.id);
+  const msgId = Number(req.params.msgId);
+  if (!isChatMember(chatId, userId)) return res.status(403).json({ error: 'Нет доступа' });
+
+  const msg: any = db.prepare('SELECT sender_id, chat_id FROM messages WHERE id = ?').get(msgId);
+  if (!msg || msg.chat_id !== chatId) return res.status(404).json({ error: 'Сообщение не найдено' });
+  if (msg.sender_id !== userId) return res.status(403).json({ error: 'Можно удалять только свои сообщения' });
+
+  // Отвязываем ответы на это сообщение, чтобы не висела мёртвая ссылка
+  db.prepare('UPDATE messages SET reply_to = NULL WHERE reply_to = ?').run(msgId);
+  db.prepare('DELETE FROM messages WHERE id = ?').run(msgId);
+  const members: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+  for (const m of members) {
+    notifyUser(m.user_id, 'chat:deleted', { chatId, id: msgId });
+    notifyUser(m.user_id, 'chats:update', {});
+  }
+  res.json({ ok: true });
 });

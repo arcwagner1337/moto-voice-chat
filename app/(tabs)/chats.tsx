@@ -27,6 +27,7 @@ export default function ChatsScreen() {
   const [checked, setChecked] = useState(false);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
 
   // Создание группы
   const [creating, setCreating] = useState(false);
@@ -119,6 +120,9 @@ export default function ChatsScreen() {
       : d.toLocaleDateString('ru', { day: '2-digit', month: '2-digit' });
   };
 
+  const q = search.trim().toLowerCase();
+  const visibleChats = q ? chats.filter((c) => c.title.toLowerCase().includes(q)) : chats;
+
   return (
     <View className="flex-1 bg-slate-950">
       <Stack.Screen options={{ headerShown: false }} />
@@ -151,6 +155,24 @@ export default function ChatsScreen() {
           </View>
         ) : (
           <>
+            {!creating && chats.length > 0 && (
+              <View className="flex-row items-center bg-slate-900 border border-slate-800 rounded-2xl px-3 mb-3">
+                <Text className="text-slate-500 mr-2">🔍</Text>
+                <TextInput
+                  placeholder="Поиск по чатам"
+                  placeholderTextColor="#475569"
+                  className="flex-1 text-white py-3"
+                  value={search}
+                  onChangeText={setSearch}
+                />
+                {search.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearch('')} className="px-2">
+                    <Text className="text-slate-500 font-bold">✕</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+
             {creating && (
               <View className="p-4 bg-slate-900 rounded-3xl border border-cyan-500/40 mb-4">
                 <Text className="text-cyan-400 font-bold uppercase mb-3 text-[10px] tracking-widest">
@@ -207,7 +229,13 @@ export default function ChatsScreen() {
               </View>
             )}
 
-            {chats.map((c) => (
+            {!creating && q.length > 0 && visibleChats.length === 0 && (
+              <View className="p-6 bg-slate-900/50 rounded-3xl border border-slate-800">
+                <Text className="text-slate-500 text-xs">Чатов с «{search.trim()}» не найдено.</Text>
+              </View>
+            )}
+
+            {visibleChats.map((c) => (
               <TouchableOpacity
                 key={c.id}
                 onPress={() => router.push(`/chat/${c.id}`)}

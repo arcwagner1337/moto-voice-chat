@@ -1,5 +1,5 @@
-import notifee, { AndroidImportance } from '@notifee/react-native';
-import { ChatMessage, SocialUser, getSavedUser } from './api';
+import notifee, { AndroidImportance, EventType, Event } from '@notifee/react-native';
+import { ChatMessage, SocialUser, getSavedUser, sendChatMessage, markChatRead } from './api';
 import { getSocialSocket } from './socialSocket';
 
 // Какой чат сейчас открыт на экране — по нему уведомления не показываем
@@ -24,8 +24,37 @@ async function showMessageNotification(msg: ChatMessage) {
     android: {
       channelId,
       pressAction: { id: 'open-chat', launchActivity: 'default' },
+      // Быстрый ответ прямо из шторки: поле ввода + кнопка «Отправить»
+      actions: [
+        {
+          title: 'Ответить',
+          pressAction: { id: 'reply' },
+          input: {
+            allowFreeFormInput: true,
+            placeholder: 'Сообщение…',
+          },
+        },
+      ],
     },
   });
+}
+
+// Обработка нажатий на уведомление (в т.ч. быстрый ответ из шторки).
+// Вызывается и из foreground-, и из background-обработчика.
+export async function handleNotificationEvent({ type, detail }: Event) {
+  if (type !== EventType.ACTION_PRESS) return;
+  if (detail.pressAction?.id !== 'reply') return;
+  const input = (detail.input || '').trim();
+  const chatId = Number(detail.notification?.data?.chatId);
+  if (!input || !chatId) return;
+  try {
+    const msg = await sendChatMessage(chatId, input);
+    markChatRead(chatId, msg.id);
+    // Ответ ушёл — убираем уведомление этого чата
+    await notifee.cancelNotification(`msg-${chatId}`);
+  } catch {
+    // сеть/сессия — тихо игнорируем, пользователь допишет в приложении
+  }
 }
 
 async function showSocialNotification(opts: {

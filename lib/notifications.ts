@@ -103,6 +103,26 @@ export async function initMessageNotifications() {
     }
   });
 
+  sock.on(
+    'sos:alert',
+    async (a: { from: SocialUser; message: string; lat: number | null; lng: number | null }) => {
+      try {
+        const coords = a.lat != null && a.lng != null ? ` (${a.lat.toFixed(5)}, ${a.lng.toFixed(5)})` : '';
+        await showSocialNotification({
+          id: `sos-${a.from.id}-${Date.now()}`,
+          title: `🆘 SOS от ${a.from.avatar} ${a.from.displayName}`,
+          body: `${a.message}${coords}`,
+          data: {
+            sos: '1',
+            lat: a.lat != null ? String(a.lat) : '',
+            lng: a.lng != null ? String(a.lng) : '',
+          },
+          channel: { id: 'sos', name: 'SOS — экстренные' },
+        });
+      } catch {}
+    }
+  );
+
   sock.on('friend:request', async ({ from }: { from: SocialUser }) => {
     try {
       await showSocialNotification({

@@ -1,6 +1,6 @@
 import { Stack, useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState, Modal } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -13,7 +13,10 @@ import {
   RouteVisibility,
   TrackPoint,
   NavStep,
+  SosAlert,
   getRoad,
+  sendSos,
+  getFriends,
   getSavedUser,
   getFriendLocations,
   getActiveRides,
@@ -185,6 +188,21 @@ export default function MapScreen() {
     stepDist: number;
     offRoute: number;
   } | null>(null);
+
+  // SOS: экстренное оповещение друзей. Пустой список получателей = всем друзьям.
+  const [sosRecipients, setSosRecipients] = useState<number[]>([]);
+  const [sosSettings, setSosSettings] = useState(false);
+  const [sosFriends, setSosFriends] = useState<SocialUser[]>([]);
+  const [sosSending, setSosSending] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem('@sos_recipients').then((v) => {
+      if (v) {
+        try {
+          setSosRecipients(JSON.parse(v));
+        } catch {}
+      }
+    });
+  }, []);
 
   // Запись маршрута
   const [recording, setRecording] = useState(false);
@@ -604,6 +622,25 @@ export default function MapScreen() {
           ]
         );
       };
+      const onSos = (a: SosAlert) => {
+        const who = `${a.from.avatar} ${a.from.displayName}`;
+        const hasCoords = a.lat != null && a.lng != null;
+        Alert.alert(
+          `🆘 SOS от ${who}`,
+          `${a.message}` +
+            (hasCoords ? `\n\nКоординаты: ${a.lat!.toFixed(5)}, ${a.lng!.toFixed(5)}` : '\n\n(без координат)'),
+          hasCoords
+            ? [
+                { text: 'Закрыть', style: 'cancel' },
+                {
+                  text: '🏍️ На помощь',
+                  onPress: () =>
+                    buildRoad({ lat: a.lat!, lng: a.lng!, name: `SOS: ${a.from.displayName}` }),
+                },
+              ]
+            : [{ text: 'Закрыть' }]
+        );
+      };
 
       (async () => {
         const saved = await getSavedUser();
@@ -623,6 +660,7 @@ export default function MapScreen() {
             sock.on('rides:update', onRidesUpdate);
             sock.on('routes:update', onRoutesUpdate);
             sock.on('nav:waypoint', onWaypoint);
+            sock.on('sos:alert', onSos);
           }
         }
       })();
@@ -635,6 +673,7 @@ export default function MapScreen() {
           sock.off('rides:update', onRidesUpdate);
           sock.off('routes:update', onRoutesUpdate);
           sock.off('nav:waypoint', onWaypoint);
+          sock.off('sos:alert', onSos);
         }
       };
     }, [pushMarkers, refreshFriendLocations, refreshRides, refreshRoutes])
@@ -920,6 +959,61 @@ export default function MapScreen() {
     Alert.alert('Точка отправлена', 'Друзья получили точку и смогут построить к ней маршрут.');
   };
 
+  // ---------- SOS ----------
+
+  const openSosSettings = async () => {
+    setSosSettings(true);
+    try {
+      const { friends } = await getFriends();
+      setSosFriends(friends);
+    } catch {
+      setSosFriends([]);
+    }
+  };
+
+  const toggleSosRecipient = (id: number) => {
+    setSosRecipients((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      AsyncStorage.setItem('@sos_recipients', JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  const doSos = async () => {
+    setSosSending(true);
+    try {
+      const pos = myPosRef.current;
+      const r = await sendSos(
+        pos?.lat ?? null,
+        pos?.lng ?? null,
+        'У меня беда, прошу помочь!',
+        sosRecipients
+      );
+      Alert.alert(
+        r.sent > 0 ? '🆘 SOS отправлен' : 'Некому отправить',
+        r.sent > 0
+          ? `Оповещено друзей: ${r.sent}${pos ? '' : '\n(координаты не приложены — нет GPS)'}`
+          : 'Добавьте друзей или проверьте выбранных получателей в настройках SOS.'
+      );
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    } finally {
+      setSosSending(false);
+    }
+  };
+
+  const triggerSos = () => {
+    const who = sosRecipients.length ? `выбранным друзьям (${sosRecipients.length})` : 'всем друзьям';
+    Alert.alert(
+      '🆘 Отправить SOS?',
+      `Экстренное оповещение с вашими координатами уйдёт ${who}.`,
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: '🆘 Отправить', style: 'destructive', onPress: doSos },
+      ]
+    );
+  };
+
   const fmtDist = (m: number) => (m < 1000 ? `${Math.round(m)} м` : `${(m / 1000).toFixed(1)} км`);
   const fmtDur = (sec: number) => {
     const h = Math.floor(sec / 3600);
@@ -1064,6 +1158,18 @@ export default function MapScreen() {
                 <Text className="text-base">{pickingDest ? '✕' : '📍'}</Text>
               </TouchableOpacity>
             )}
+
+            {/* SOS: тап — оповестить, долгий тап — выбрать получателей */}
+            <TouchableOpacity
+              onPress={triggerSos}
+              onLongPress={openSosSettings}
+              delayLongPress={400}
+              disabled={sosSending}
+              style={{ zIndex: 25, elevation: 25 }}
+              className="absolute bottom-16 left-3 w-10 h-10 rounded-xl items-center justify-center bg-red-600 border border-red-400"
+            >
+              {sosSending ? <ActivityIndicator color="#fff" size="small" /> : <Text className="text-white text-[11px] font-black">SOS</Text>}
+            </TouchableOpacity>
 
             {/* Подсказка выбора точки */}
             {pickingDest && (
@@ -1607,6 +1713,78 @@ export default function MapScreen() {
           )}
         </>
       )}
+
+      {/* Настройка получателей SOS */}
+      <Modal
+        visible={sosSettings}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSosSettings(false)}
+      >
+        <TouchableOpacity
+          className="flex-1 bg-black/50 justify-end"
+          activeOpacity={1}
+          onPress={() => setSosSettings(false)}
+        >
+          <View className="bg-slate-900 rounded-t-3xl p-4 pb-8 border-t border-red-500/40 max-h-[70%]">
+            <View className="items-center mb-2">
+              <View className="w-10 h-1 bg-slate-700 rounded-full mb-3" />
+            </View>
+            <Text className="text-red-400 font-bold uppercase text-xs tracking-widest mb-1">
+              🆘 Получатели SOS
+            </Text>
+            <Text className="text-slate-500 text-[11px] mb-3">
+              Никого не выбрано — SOS уйдёт всем друзьям. Выберите конкретных, чтобы слать только им.
+            </Text>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {sosFriends.length === 0 ? (
+                <Text className="text-slate-600 text-xs py-4">Сначала добавьте друзей во вкладке FRIENDS.</Text>
+              ) : (
+                sosFriends.map((f) => {
+                  const on = sosRecipients.includes(f.id);
+                  return (
+                    <TouchableOpacity
+                      key={f.id}
+                      onPress={() => toggleSosRecipient(f.id)}
+                      className={`flex-row items-center p-3 rounded-2xl border mb-1.5 ${
+                        on ? 'bg-red-500/10 border-red-500/50' : 'bg-slate-950 border-slate-800'
+                      }`}
+                    >
+                      <Text className="text-xl mr-3">{f.avatar}</Text>
+                      <View className="flex-1">
+                        <Text className="text-white font-bold text-sm">{f.displayName}</Text>
+                        <Text className="text-slate-500 font-mono text-[10px]">@{f.username}</Text>
+                      </View>
+                      <Text className={`text-base ${on ? 'text-red-400' : 'text-slate-600'}`}>
+                        {on ? '☑' : '☐'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </ScrollView>
+            <View className="flex-row gap-2 mt-3">
+              {sosRecipients.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setSosRecipients([]);
+                    AsyncStorage.setItem('@sos_recipients', JSON.stringify([])).catch(() => {});
+                  }}
+                  className="flex-1 p-3 rounded-2xl bg-slate-800 border border-slate-700 items-center"
+                >
+                  <Text className="text-slate-300 font-bold text-[11px] uppercase">Всем друзьям</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                onPress={() => setSosSettings(false)}
+                className="flex-1 p-3 rounded-2xl bg-red-600 items-center"
+              >
+                <Text className="text-white font-bold text-[11px] uppercase">Готово</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }

@@ -969,3 +969,31 @@ api.get('/route', requireAuth, async (req, res) => {
     res.status(502).json({ error: 'Роутинг временно недоступен' });
   }
 });
+
+// ---------- SOS: экстренное оповещение друзей ----------
+
+api.post('/sos', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  const message = (String(req.body?.message || '').trim() || 'У меня беда, прошу помочь').slice(0, 300);
+
+  const friends = friendIdsOf(userId);
+  // Если получатели не заданы — шлём всем друзьям; иначе только выбранным (и
+  // только тем, кто реально в друзьях).
+  const picked: number[] = Array.isArray(req.body?.recipientIds)
+    ? req.body.recipientIds.map(Number)
+    : [];
+  const targets = picked.length ? picked.filter((id) => friends.includes(id)) : friends;
+
+  const from = getUserById(userId);
+  const payload = {
+    from,
+    message,
+    lat: isFinite(lat) ? lat : null,
+    lng: isFinite(lng) ? lng : null,
+    at: now(),
+  };
+  for (const t of targets) notifyUser(t, 'sos:alert', payload);
+  res.json({ ok: true, sent: targets.length });
+});

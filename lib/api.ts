@@ -226,6 +226,28 @@ export const getRoad = (
     `/route?from=${from.lat},${from.lng}&to=${to.lat},${to.lng}`
   );
 
+// ---------- SOS ----------
+
+export type SosAlert = {
+  from: SocialUser;
+  message: string;
+  lat: number | null;
+  lng: number | null;
+  at: number;
+};
+
+// Экстренное оповещение друзей. recipientIds пусто → всем друзьям.
+export const sendSos = (
+  lat: number | null,
+  lng: number | null,
+  message: string,
+  recipientIds?: number[]
+) =>
+  request<{ ok: boolean; sent: number }>('/sos', {
+    method: 'POST',
+    body: { lat, lng, message, ...(recipientIds && recipientIds.length ? { recipientIds } : {}) },
+  });
+
 export const removeChatMember = (chatId: number, userId: number) =>
   request<{ chat: ChatSummary | null }>(`/chats/${chatId}/members/${userId}`, {
     method: 'DELETE',

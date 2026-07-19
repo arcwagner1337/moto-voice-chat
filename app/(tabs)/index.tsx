@@ -174,7 +174,7 @@ export default function ProjectInfo() {
       <ScrollView
         contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16 }}
         showsVerticalScrollIndicator={false}>
-        <ScreenHeader title="MESH_VOICE" subtitle="v2.5.0 dashboard" />
+        <ScreenHeader title="MESH_VOICE" subtitle="v2.5.1 dashboard" />
 
         <TouchableOpacity
           onPress={() => router.push('/profile')}

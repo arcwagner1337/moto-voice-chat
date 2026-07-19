@@ -73,6 +73,14 @@ export default function InternetChatRoom() {
 	const [nowPlaying, setNowPlaying] = useState<MusicTrack | null>(null);
 	const [musicPlaying, setMusicPlaying] = useState(false);
 	const soundRef = useRef<Audio.Sound | null>(null);
+	// Локальное отключение музыки: не хочу слушать — глушу у себя (для остальных
+	// продолжает играть). Сохраняется между сессиями.
+	const [musicMuted, setMusicMuted] = useState(false);
+	const musicMutedRef = useRef(false);
+	useEffect(() => { musicMutedRef.current = musicMuted; }, [musicMuted]);
+	useEffect(() => {
+		AsyncStorage.getItem('@music_muted').then((v) => { if (v === '1') setMusicMuted(true); });
+	}, []);
 
 	const socket = useRef<any>(null);
 	const peers = useRef<{ [key: string]: RTCPeerConnection }>({});
@@ -521,7 +529,7 @@ export default function InternetChatRoom() {
 			}
 			const { sound } = await Audio.Sound.createAsync(
 				{ uri: track.streamUrl },
-				{ shouldPlay: play, positionMillis: Math.max(0, positionMillis) }
+				{ shouldPlay: play, positionMillis: Math.max(0, positionMillis), volume: musicMutedRef.current ? 0 : 1 }
 			);
 			soundRef.current = sound;
 			setNowPlaying(track);
@@ -568,6 +576,17 @@ export default function InternetChatRoom() {
 		setNowPlaying(null);
 		setMusicPlaying(false);
 		socket.current?.emit('music:stop', roomIDRef.current);
+	};
+
+	// Локальное отключение музыки (только у себя): глушим текущий трек громкостью,
+	// синхронизация и звук для остальных не затрагиваются.
+	const toggleMusicMute = () => {
+		setMusicMuted((prev) => {
+			const next = !prev;
+			AsyncStorage.setItem('@music_muted', next ? '1' : '0').catch(() => { });
+			soundRef.current?.setVolumeAsync(next ? 0 : 1).catch(() => { });
+			return next;
+		});
 	};
 
 	// Явная установка мута (используется и кнопкой, и кнопками громкости)
@@ -780,11 +799,13 @@ export default function InternetChatRoom() {
 
 								{/* Синхронная музыка комнаты */}
 								{nowPlaying ? (
-									<View className="flex-row items-center mb-3 p-3 bg-violet-500/10 border border-violet-500/40 rounded-2xl">
-										<Text className="text-lg mr-2">🎵</Text>
+									<View className={`flex-row items-center mb-3 p-3 border rounded-2xl ${musicMuted ? 'bg-slate-900 border-slate-700' : 'bg-violet-500/10 border-violet-500/40'}`}>
+										<TouchableOpacity onPress={toggleMusicMute} className="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 items-center justify-center mr-2">
+											<Text className="text-sm">{musicMuted ? '🔇' : '🔊'}</Text>
+										</TouchableOpacity>
 										<View className="flex-1 mr-2">
-											<Text className="text-violet-200 font-bold text-xs" numberOfLines={1}>{nowPlaying.title}</Text>
-											<Text className="text-slate-400 text-[10px]" numberOfLines={1}>{nowPlaying.artist}</Text>
+											<Text className={`font-bold text-xs ${musicMuted ? 'text-slate-400' : 'text-violet-200'}`} numberOfLines={1}>{nowPlaying.title}</Text>
+											<Text className="text-slate-400 text-[10px]" numberOfLines={1}>{musicMuted ? 'музыка выключена у вас' : nowPlaying.artist}</Text>
 										</View>
 										<TouchableOpacity onPress={djToggle} className="w-9 h-9 rounded-xl bg-violet-600 items-center justify-center mr-1.5">
 											<Text className="text-white text-sm">{musicPlaying ? '⏸' : '▶'}</Text>
@@ -797,10 +818,15 @@ export default function InternetChatRoom() {
 										</TouchableOpacity>
 									</View>
 								) : (
-									<TouchableOpacity onPress={() => setMusicOpen(true)} className="flex-row items-center justify-center mb-3 p-3 bg-slate-900 border border-violet-500/30 rounded-2xl">
-										<Text className="text-base mr-2">🎵</Text>
-										<Text className="text-violet-300 font-bold text-[11px] uppercase">Поставить музыку на всех</Text>
-									</TouchableOpacity>
+									<View className="flex-row items-center mb-3 gap-2">
+										<TouchableOpacity onPress={() => setMusicOpen(true)} className="flex-1 flex-row items-center justify-center p-3 bg-slate-900 border border-violet-500/30 rounded-2xl">
+											<Text className="text-base mr-2">🎵</Text>
+											<Text className="text-violet-300 font-bold text-[11px] uppercase">Поставить музыку на всех</Text>
+										</TouchableOpacity>
+										<TouchableOpacity onPress={toggleMusicMute} className={`w-12 p-3 rounded-2xl border items-center justify-center ${musicMuted ? 'bg-red-500/10 border-red-500/40' : 'bg-slate-900 border-slate-700'}`}>
+											<Text className="text-base">{musicMuted ? '🔇' : '🔊'}</Text>
+										</TouchableOpacity>
+									</View>
 								)}
 
 								<View className="flex-row items-end mb-4 gap-2">

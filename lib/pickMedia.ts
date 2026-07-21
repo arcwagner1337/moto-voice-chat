@@ -8,7 +8,7 @@ export async function pickAndUpload(allowVideo = false): Promise<Attachment | nu
   if (!perm.granted) throw new Error('Нет доступа к галерее');
   const res = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: allowVideo ? ['images', 'videos'] : ['images'],
-    quality: 0.7,
+    quality: 0.4, // сильнее жмём — через dev-tunnel аплоад узкий
   });
   if (res.canceled || !res.assets?.length) return null;
   const a = res.assets[0];

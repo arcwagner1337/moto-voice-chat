@@ -154,6 +154,7 @@ const migrations = [
   'ALTER TABLE events ADD COLUMN photo TEXT',
   'ALTER TABLE messages ADD COLUMN attachment_url TEXT',
   'ALTER TABLE messages ADD COLUMN attachment_type TEXT',
+  'ALTER TABLE messages ADD COLUMN attachments TEXT',
   'ALTER TABLE map_pins ADD COLUMN emoji TEXT',
 ];
 for (const m of migrations) {

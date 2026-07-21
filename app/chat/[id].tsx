@@ -35,8 +35,8 @@ import {
   mediaUrl,
   uploadFile,
 } from '../../lib/api';
-import { Audio } from 'expo-av';
-import { pickAndUpload } from '../../lib/pickMedia';
+import { Audio, Video, ResizeMode } from 'expo-av';
+import { pickAndUpload, pickAndUploadMany } from '../../lib/pickMedia';
 import { getSocialSocket } from '../../lib/socialSocket';
 import { setOpenChat, cancelChatNotification } from '../../lib/notifications';
 
@@ -56,8 +56,11 @@ export default function ChatScreen() {
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [menuMsg, setMenuMsg] = useState<ChatMessage | null>(null);
-  const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  // Полноэкранный просмотр внутри приложения
+  const [fullImage, setFullImage] = useState<string | null>(null);
+  const [fullVideo, setFullVideo] = useState<string | null>(null);
 
   // Голосовые сообщения (запись через expo-av)
   const recordingRef = useRef<Audio.Recording | null>(null);
@@ -68,10 +71,10 @@ export default function ChatScreen() {
   const attachMedia = async () => {
     setUploading(true);
     try {
-      const a = await pickAndUpload(true);
-      if (a) {
-        setAttachment(a);
-        setEditing(null); // к правке файл не цепляем
+      const arr = await pickAndUploadMany(true, 10);
+      if (arr.length) {
+        setAttachments((prev) => [...prev, ...arr].slice(0, 10));
+        setEditing(null); // к правке файлы не цепляем
       }
     } catch (e) {
       Alert.alert('Ошибка', (e as Error).message);
@@ -336,21 +339,21 @@ export default function ChatScreen() {
 
   const send = async () => {
     const t = text.trim();
-    const att = attachment;
-    if ((!t && !att) || sending) return;
+    const atts = attachments;
+    if ((!t && atts.length === 0) || sending) return;
     const editingMsg = editing;
     const replyMsg = replyingTo;
     setSending(true);
     setText('');
     setEditing(null);
     setReplyingTo(null);
-    setAttachment(null);
+    setAttachments([]);
     try {
       if (editingMsg) {
         const msg = await editChatMessage(chatId, editingMsg.id, t);
         setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)));
       } else {
-        const msg = await sendChatMessage(chatId, t, replyMsg?.id, att);
+        const msg = await sendChatMessage(chatId, t, replyMsg?.id, atts);
         setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
         scrollToEnd();
       }
@@ -359,7 +362,7 @@ export default function ChatScreen() {
       if (editingMsg) setEditing(editingMsg);
       else {
         setReplyingTo(replyMsg);
-        setAttachment(att);
+        setAttachments(atts);
       }
       Alert.alert('Ошибка', (e as Error).message);
     } finally {
@@ -519,6 +522,8 @@ export default function ChatScreen() {
               fmtTime={fmtTime}
               onReply={() => startReply(item)}
               onOpenMenu={() => setMenuMsg(item)}
+              onOpenImage={setFullImage}
+              onOpenVideo={setFullVideo}
             />
           )}
         />
@@ -541,19 +546,27 @@ export default function ChatScreen() {
           </View>
         )}
 
-        {/* Превью прикреплённого файла */}
-        {attachment && (
-          <View className="flex-row items-center mx-4 mb-1 px-3 py-2 bg-slate-900 border-l-2 border-cyan-500 rounded-lg">
-            {attachment.type.startsWith('image') ? (
-              <Image source={{ uri: mediaUrl(attachment.url) }} className="w-9 h-9 rounded mr-2" />
-            ) : (
-              <Text className="text-lg mr-2">{attachment.type.startsWith('video') ? '🎬' : '📎'}</Text>
-            )}
-            <Text className="flex-1 text-slate-300 text-xs" numberOfLines={1}>Вложение готово к отправке</Text>
-            <TouchableOpacity onPress={() => setAttachment(null)} className="px-2">
-              <Text className="text-slate-500 font-bold">✕</Text>
-            </TouchableOpacity>
-          </View>
+        {/* Превью прикреплённых файлов (можно несколько) */}
+        {attachments.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mx-4 mb-1" contentContainerStyle={{ gap: 8 }}>
+            {attachments.map((a, i) => (
+              <View key={`${a.url}-${i}`} className="relative">
+                {a.type.startsWith('image') ? (
+                  <Image source={{ uri: mediaUrl(a.url) }} className="w-16 h-16 rounded-lg" />
+                ) : (
+                  <View className="w-16 h-16 rounded-lg bg-slate-900 border border-slate-700 items-center justify-center">
+                    <Text className="text-2xl">{a.type.startsWith('video') ? '🎬' : a.type.startsWith('audio') ? '🎤' : '📎'}</Text>
+                  </View>
+                )}
+                <TouchableOpacity
+                  onPress={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                  className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-slate-950 border border-slate-600 items-center justify-center"
+                >
+                  <Text className="text-white text-[11px] font-bold">✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
         )}
 
         {/* Ввод */}
@@ -594,7 +607,7 @@ export default function ChatScreen() {
               value={text}
               onChangeText={setText}
             />
-            {text.trim() || editing || attachment ? (
+            {text.trim() || editing || attachments.length > 0 ? (
               <TouchableOpacity
                 onPress={send}
                 disabled={sending}
@@ -646,6 +659,48 @@ export default function ChatScreen() {
             )}
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Полноэкранное фото внутри приложения */}
+      <Modal visible={!!fullImage} transparent animationType="fade" onRequestClose={() => setFullImage(null)}>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setFullImage(null)}
+          className="flex-1 bg-black items-center justify-center"
+        >
+          {fullImage && (
+            <Image source={{ uri: fullImage }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+          )}
+          <TouchableOpacity
+            onPress={() => setFullImage(null)}
+            style={{ position: 'absolute', top: 48, right: 16 }}
+            className="w-10 h-10 rounded-full bg-black/60 border border-white/20 items-center justify-center"
+          >
+            <Text className="text-white text-lg">✕</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Полноэкранное видео внутри приложения */}
+      <Modal visible={!!fullVideo} transparent animationType="fade" onRequestClose={() => setFullVideo(null)}>
+        <View className="flex-1 bg-black items-center justify-center">
+          {fullVideo && (
+            <Video
+              source={{ uri: fullVideo }}
+              style={{ width: '100%', height: '100%' }}
+              resizeMode={ResizeMode.CONTAIN}
+              useNativeControls
+              shouldPlay
+            />
+          )}
+          <TouchableOpacity
+            onPress={() => setFullVideo(null)}
+            style={{ position: 'absolute', top: 48, right: 16 }}
+            className="w-10 h-10 rounded-full bg-black/60 border border-white/20 items-center justify-center"
+          >
+            <Text className="text-white text-lg">✕</Text>
+          </TouchableOpacity>
+        </View>
       </Modal>
     </View>
   );
@@ -784,6 +839,8 @@ function MessageBubble({
   fmtTime,
   onReply,
   onOpenMenu,
+  onOpenImage,
+  onOpenVideo,
 }: {
   message: ChatMessage;
   mine: boolean;
@@ -791,6 +848,8 @@ function MessageBubble({
   fmtTime: (ts: number) => string;
   onReply: () => void;
   onOpenMenu: () => void;
+  onOpenImage: (url: string) => void;
+  onOpenVideo: (url: string) => void;
 }) {
   const tx = useRef(new Animated.Value(0)).current;
   const pan = useRef(
@@ -840,31 +899,53 @@ function MessageBubble({
               </Text>
             </View>
           )}
-          {message.attachment && (
-            message.attachment.type.startsWith('audio') ? (
-              <VoicePlayer url={mediaUrl(message.attachment.url)} mine={mine} />
-            ) : (
-              <TouchableOpacity
-                onPress={() => Linking.openURL(mediaUrl(message.attachment!.url)).catch(() => {})}
-                className="mb-1"
-              >
-                {message.attachment.type.startsWith('image') ? (
-                  <Image
-                    source={{ uri: mediaUrl(message.attachment.url) }}
-                    className="w-52 h-52 rounded-xl"
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <View className="flex-row items-center p-3 bg-slate-900/60 rounded-xl">
-                    <Text className="text-xl mr-2">{message.attachment.type.startsWith('video') ? '🎬' : '📎'}</Text>
-                    <Text className="text-cyan-300 text-xs underline">
-                      {message.attachment.type.startsWith('video') ? 'Открыть видео' : 'Открыть файл'}
-                    </Text>
+          {(() => {
+            const atts = message.attachments?.length
+              ? message.attachments
+              : message.attachment
+              ? [message.attachment]
+              : [];
+            if (!atts.length) return null;
+            const audios = atts.filter((a) => a.type.startsWith('audio'));
+            const media = atts.filter((a) => !a.type.startsWith('audio'));
+            const dim = media.length === 1 ? 'w-52 h-52' : 'w-24 h-24';
+            return (
+              <View className="mb-1">
+                {audios.map((a, i) => (
+                  <VoicePlayer key={`aud${i}`} url={mediaUrl(a.url)} mine={mine} />
+                ))}
+                {media.length > 0 && (
+                  <View className="flex-row flex-wrap" style={{ gap: 4, maxWidth: 224 }}>
+                    {media.map((a, i) =>
+                      a.type.startsWith('image') ? (
+                        <TouchableOpacity key={i} onPress={() => onOpenImage(mediaUrl(a.url))}>
+                          <Image source={{ uri: mediaUrl(a.url) }} className={`${dim} rounded-xl`} resizeMode="cover" />
+                        </TouchableOpacity>
+                      ) : a.type.startsWith('video') ? (
+                        <TouchableOpacity
+                          key={i}
+                          onPress={() => onOpenVideo(mediaUrl(a.url))}
+                          className={`${dim} rounded-xl bg-black items-center justify-center`}
+                        >
+                          <Text className="text-3xl">▶️</Text>
+                          <Text className="text-white/70 text-[9px] mt-1">Видео</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          key={i}
+                          onPress={() => Linking.openURL(mediaUrl(a.url)).catch(() => {})}
+                          className="flex-row items-center p-3 bg-slate-900/60 rounded-xl"
+                        >
+                          <Text className="text-xl mr-2">📎</Text>
+                          <Text className="text-cyan-300 text-xs underline">Открыть файл</Text>
+                        </TouchableOpacity>
+                      )
+                    )}
                   </View>
                 )}
-              </TouchableOpacity>
-            )
-          )}
+              </View>
+            );
+          })()}
           {!!message.text && <MessageText text={message.text} mine={mine} />}
           <Text className={`text-[8px] mt-1 ${mine ? 'text-cyan-300' : 'text-slate-500'}`}>
             {message.editedAt ? 'изм. · ' : ''}

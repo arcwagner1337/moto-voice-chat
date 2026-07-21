@@ -35,6 +35,7 @@ export type ChatMessage = {
   editedAt?: number | null;
   replyTo?: ReplyPreview | null;
   attachment?: Attachment | null;
+  attachments?: Attachment[] | null;
   sender: SocialUser;
 };
 
@@ -215,16 +216,18 @@ export const sendChatMessage = (
   chatId: number,
   text: string,
   replyTo?: number,
-  attachment?: Attachment | null
-) =>
-  request<{ message: ChatMessage }>(`/chats/${chatId}/messages`, {
+  attach?: Attachment | Attachment[] | null
+) => {
+  const arr = Array.isArray(attach) ? attach : attach ? [attach] : [];
+  return request<{ message: ChatMessage }>(`/chats/${chatId}/messages`, {
     method: 'POST',
     body: {
       text,
       ...(replyTo ? { replyTo } : {}),
-      ...(attachment ? { attachmentUrl: attachment.url, attachmentType: attachment.type } : {}),
+      ...(arr.length ? { attachments: arr } : {}),
     },
   }).then((d) => d.message);
+};
 
 export const editChatMessage = (chatId: number, msgId: number, text: string) =>
   request<{ message: ChatMessage }>(`/chats/${chatId}/messages/${msgId}`, {

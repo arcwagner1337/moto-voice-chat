@@ -801,6 +801,18 @@ const MESSAGE_SELECT = `
   LEFT JOIN users ru ON ru.id = rm.sender_id`;
 
 function messagePayload(r: any) {
+  // Вложения: новый формат — JSON-массив в attachments; старый — одиночные
+  // attachment_url/type (обратная совместимость со старыми сообщениями/клиентами).
+  let attachments: { url: string; type: string }[] = [];
+  if (r.attachments) {
+    try {
+      const arr = JSON.parse(r.attachments);
+      if (Array.isArray(arr)) attachments = arr.filter((a: any) => a && a.url);
+    } catch {}
+  }
+  if (!attachments.length && r.attachment_url) {
+    attachments = [{ url: r.attachment_url, type: r.attachment_type || '' }];
+  }
   return {
     id: r.id,
     chatId: r.chat_id,
@@ -810,7 +822,8 @@ function messagePayload(r: any) {
     replyTo: r.reply_to
       ? { id: r.reply_to, text: r.reply_text ?? '', senderName: r.reply_sender ?? '' }
       : null,
-    attachment: r.attachment_url ? { url: r.attachment_url, type: r.attachment_type || '' } : null,
+    attachment: attachments[0] || null,
+    attachments,
     sender: { id: r.sender_id, username: r.username, displayName: r.display_name, avatar: r.avatar },
   };
 }
@@ -839,9 +852,21 @@ api.post('/chats/:id/messages', requireAuth, (req, res) => {
   const chatId = Number(req.params.id);
   if (!isChatMember(chatId, userId)) return res.status(403).json({ error: 'Нет доступа' });
   const text = String(req.body?.text || '').trim();
-  const attachmentUrl = String(req.body?.attachmentUrl || '').trim() || null;
-  const attachmentType = String(req.body?.attachmentType || '').trim().slice(0, 60) || null;
-  if (!text && !attachmentUrl) return res.status(400).json({ error: 'Пустое сообщение' });
+  // Вложения: массив attachments (несколько фото/видео) ИЛИ старые одиночные поля
+  let attachments: { url: string; type: string }[] = [];
+  if (Array.isArray(req.body?.attachments)) {
+    attachments = req.body.attachments
+      .filter((a: any) => a && typeof a.url === 'string' && a.url.trim())
+      .slice(0, 10)
+      .map((a: any) => ({ url: String(a.url).trim(), type: String(a.type || '').trim().slice(0, 60) }));
+  } else if (String(req.body?.attachmentUrl || '').trim()) {
+    attachments = [{
+      url: String(req.body.attachmentUrl).trim(),
+      type: String(req.body.attachmentType || '').trim().slice(0, 60),
+    }];
+  }
+  const first = attachments[0] || null;
+  if (!text && !first) return res.status(400).json({ error: 'Пустое сообщение' });
 
   // reply_to принимаем только если это сообщение из этого же чата
   let replyTo: number | null = Number(req.body?.replyTo) || null;
@@ -851,8 +876,13 @@ api.post('/chats/:id/messages', requireAuth, (req, res) => {
   }
 
   const result = db
-    .prepare('INSERT INTO messages (chat_id, sender_id, text, reply_to, attachment_url, attachment_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(chatId, userId, text.slice(0, 2000), replyTo, attachmentUrl, attachmentType, now());
+    .prepare('INSERT INTO messages (chat_id, sender_id, text, reply_to, attachment_url, attachment_type, attachments, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(
+      chatId, userId, text.slice(0, 2000), replyTo,
+      first?.url || null, first?.type || null,
+      attachments.length ? JSON.stringify(attachments) : null,
+      now()
+    );
 
   const message = loadMessage(Number(result.lastInsertRowid));
 

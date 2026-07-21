@@ -271,16 +271,26 @@ export default function MeshChatRoom() {
     // (ensureLocalStream), иначе индикатор записи горит постоянно.
 
     // Прямое определение локального IP вместо самопубликации mDNS: многие
-    // устройства не получают обратно свои же multicast-анонсы, из-за чего
-    // myIp мог никогда не устанавливаться.
-    try {
-      const ip = await Network.getIpAddressAsync();
-      if (ip && ip !== '0.0.0.0') setMyIp(ip);
-    } catch (e) {
-      console.log('Не удалось получить IP через expo-network:', e);
-    }
+    // устройства не получают обратно свои же multicast-анонсы. С ретраями,
+    // т.к. сразу после старта Wi-Fi может ещё не отдавать адрес.
+    await detectIp();
 
     setupDiscovery();
+  };
+
+  // Определение своего IP с несколькими попытками. Возвращает адрес или ''.
+  const detectIp = async (): Promise<string> => {
+    for (let i = 0; i < 5; i++) {
+      try {
+        const ip = await Network.getIpAddressAsync();
+        if (ip && ip !== '0.0.0.0' && !ip.startsWith('169.254')) {
+          setMyIp(ip);
+          return ip;
+        }
+      } catch { }
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    return '';
   };
 
 
@@ -318,7 +328,16 @@ export default function MeshChatRoom() {
   };
 
   const createRoom = async () => {
-    if (!myIp) return Alert.alert("Ошибка", "Дождитесь определения IP");
+    let ip = myIp.trim();
+    if (!ip) {
+      ip = await detectIp();
+      if (!ip) {
+        return Alert.alert(
+          'IP не определён',
+          'Подключитесь к Wi-Fi и нажмите 🔄, либо введите IP вручную (его видно в настройках Wi-Fi телефона).'
+        );
+      }
+    }
     const port = parseInt(roomPort);
     activePort.current = port;
 
@@ -657,6 +676,27 @@ export default function MeshChatRoom() {
                 </View>
 
                 <View className="bg-slate-900 p-4 rounded-3xl mt-4 border border-slate-800">
+                  {/* Мой IP: авто-определение + ручной ввод как запасной путь */}
+                  <View className="flex-row items-center mb-2 pb-2 border-b border-slate-800">
+                    <Text className="text-slate-500 text-[10px] uppercase mr-2">Мой IP</Text>
+                    <TextInput
+                      placeholder="192.168.x.x"
+                      placeholderTextColor="#475569"
+                      className={`flex-1 font-mono text-sm p-1 ${myIp ? 'text-cyan-400' : 'text-white'}`}
+                      value={myIp}
+                      onChangeText={setMyIp}
+                      autoCapitalize="none"
+                    />
+                    <TouchableOpacity
+                      onPress={async () => {
+                        const ip = await detectIp();
+                        if (!ip) Alert.alert('IP не определён', 'Подключитесь к Wi-Fi или введите IP вручную (настройки Wi-Fi телефона).');
+                      }}
+                      className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 items-center justify-center ml-1"
+                    >
+                      <Text className="text-sm">🔄</Text>
+                    </TouchableOpacity>
+                  </View>
                   <TextInput
                     placeholder="Имя комнаты"
                     placeholderTextColor="#475569"

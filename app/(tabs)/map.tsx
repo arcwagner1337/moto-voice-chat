@@ -1,6 +1,6 @@
 import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState, Modal, Image, Linking, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState, Modal, Image, Linking, KeyboardAvoidingView, Keyboard, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -182,6 +182,7 @@ export default function MapScreen() {
   };
   const [pickingDest, setPickingDest] = useState(false);
   const [buildingRoad, setBuildingRoad] = useState(false);
+  const roadAbortRef = useRef<AbortController | null>(null);
   const pickingDestRef = useRef(false);
   // Переход из вкладки EVENTS: построить маршрут к точке сбора / открыть маршрут
   const navParams = useLocalSearchParams<{ navLat?: string; navLng?: string; navName?: string; viewRouteId?: string }>();
@@ -212,6 +213,9 @@ export default function MapScreen() {
     addingPinRef.current = addingPin;
   }, [addingPin]);
   const [pinDraft, setPinDraft] = useState<{ lat: number; lng: number } | null>(null);
+  // Высота клавиатуры — чтобы вручную поднять bottom-sheet метки над ней
+  // (в прозрачной Modal на Android KeyboardAvoidingView behavior=height ненадёжен).
+  const [kbHeight, setKbHeight] = useState(0);
   const [pinTitle, setPinTitle] = useState('');
   const [pinNote, setPinNote] = useState('');
   const [pinMedia, setPinMedia] = useState<Attachment | null>(null);
@@ -677,6 +681,18 @@ export default function MapScreen() {
     setPinMedia(null);
   };
 
+  // Слежение за клавиатурой для ручного подъёма формы метки (см. kbHeight).
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', (e) =>
+      setKbHeight(e.endCoordinates?.height ?? 0)
+    );
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKbHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
   const removePin = (p: MapPin) => {
     Alert.alert('Удалить метку?', `«${p.title}» удалится.`, [
       { text: 'Отмена', style: 'cancel' },
@@ -1037,9 +1053,13 @@ export default function MapScreen() {
     if (!pos) {
       return Alert.alert('Нет позиции', 'Дождитесь GPS и попробуйте снова.');
     }
+    // Отменяем предыдущее (незавершённое) построение, если было
+    roadAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    roadAbortRef.current = ctrl;
     setBuildingRoad(true);
     try {
-      const r = await getRoad({ lat: pos.lat, lng: pos.lng }, dest);
+      const r = await getRoad({ lat: pos.lat, lng: pos.lng }, dest, ctrl.signal);
       const cum = cumulativeMeters(r.geometry);
       const nav: RoadNav = { dest, geometry: r.geometry, steps: r.steps, distance: r.distance, duration: r.duration };
       roadNavRef.current = nav;
@@ -1052,10 +1072,24 @@ export default function MapScreen() {
       setFullMap(true);
       webRef.current?.injectJavaScript(`window.centerOn(${pos.lat}, ${pos.lng}); true;`);
     } catch (e) {
+      // Пользователь нажал «Отмена» — тихо выходим, без алерта
+      if ((e as any)?.name === 'AbortError') return;
       Alert.alert('Маршрут не построен', (e as Error).message);
     } finally {
-      setBuildingRoad(false);
+      // Гасим индикатор только если это построение всё ещё актуально
+      // (иначе новое построение уже перехватило управление)
+      if (roadAbortRef.current === ctrl) {
+        roadAbortRef.current = null;
+        setBuildingRoad(false);
+      }
     }
+  };
+
+  // Отмена текущего построения маршрута (кнопка на оверлее «Строю маршрут…»)
+  const cancelRoad = () => {
+    roadAbortRef.current?.abort();
+    roadAbortRef.current = null;
+    setBuildingRoad(false);
   };
 
   const stopRoadNav = () => {
@@ -1353,9 +1387,17 @@ export default function MapScreen() {
             {/* Строю маршрут… */}
             {buildingRoad && (
               <View className="absolute inset-0 items-center justify-center bg-black/30">
-                <View className="bg-slate-900 rounded-2xl px-5 py-4 border border-slate-700 flex-row items-center">
-                  <ActivityIndicator color="#38bdf8" />
-                  <Text className="text-white text-sm ml-3">Строю маршрут…</Text>
+                <View className="bg-slate-900 rounded-2xl px-5 py-4 border border-slate-700 items-center">
+                  <View className="flex-row items-center">
+                    <ActivityIndicator color="#38bdf8" />
+                    <Text className="text-white text-sm ml-3">Строю маршрут…</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={cancelRoad}
+                    className="mt-3 px-5 py-2 rounded-xl bg-slate-700 border border-slate-600"
+                  >
+                    <Text className="text-white text-[11px] font-bold uppercase">Отмена</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             )}
@@ -1954,12 +1996,15 @@ export default function MapScreen() {
       </Modal>
 
       {/* Форма новой метки */}
-      <Modal visible={!!pinDraft} transparent animationType="slide" onRequestClose={cancelPinDraft}>
+      <Modal visible={!!pinDraft} transparent statusBarTranslucent animationType="slide" onRequestClose={cancelPinDraft}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           className="flex-1 bg-black/60 justify-end"
         >
-          <View className="bg-slate-900 rounded-t-3xl border-t border-amber-500/40 p-4 pb-8">
+          <View
+            className="bg-slate-900 rounded-t-3xl border-t border-amber-500/40 p-4 pb-8"
+            style={Platform.OS === 'android' ? { marginBottom: kbHeight } : undefined}
+          >
             <View className="items-center mb-2"><View className="w-10 h-1 bg-slate-700 rounded-full" /></View>
             <Text className="text-amber-400 font-bold uppercase text-xs tracking-widest mb-3">📌 Новая метка</Text>
             <TextInput

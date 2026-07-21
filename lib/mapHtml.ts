@@ -188,6 +188,17 @@ export const MAP_HTML = `<!DOCTYPE html>
   }
   window.setPins = setPins;
 
+  // Маркер «моя текущая позиция» (синяя точка) — отдельно от маркеров выбора,
+  // используется при выборе точки сбора события, чтобы показать, где пользователь.
+  var hereLayer = null;
+  function setHere(lat, lng) {
+    if (hereLayer) { map.removeLayer(hereLayer); hereLayer = null; }
+    hereLayer = L.circleMarker([lat, lng], {
+      radius: 7, color: '#ffffff', weight: 2, fillColor: '#38bdf8', fillOpacity: 1,
+    }).addTo(map);
+  }
+  window.setHere = setHere;
+
   // Режим разметки: тапы по карте уходят в приложение
   var tapMode = false;
   function setTapMode(on) { tapMode = on; }

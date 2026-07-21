@@ -111,7 +111,7 @@ export async function clearSession() {
 
 async function request<T = any>(
   path: string,
-  opts: { method?: string; body?: any } = {}
+  opts: { method?: string; body?: any; signal?: AbortSignal } = {}
 ): Promise<T> {
   const base = await getApiBase();
   const token = await getToken();
@@ -124,8 +124,12 @@ async function request<T = any>(
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: opts.signal,
     });
-  } catch {
+  } catch (e) {
+    // Прерывание через AbortController — пробрасываем как есть, чтобы вызывающий
+    // отличил отмену от реального сбоя сети.
+    if ((e as any)?.name === 'AbortError') throw e;
     throw new Error(`Сервер недоступен (${base}). Проверьте адрес во вкладке PROFILE.`);
   }
   const data: any = await res.json().catch(() => ({}));
@@ -255,10 +259,12 @@ export type RouteResult = {
 // Дорожный маршрут между двумя точками (turn-by-turn через backend-прокси)
 export const getRoad = (
   from: { lat: number; lng: number },
-  to: { lat: number; lng: number }
+  to: { lat: number; lng: number },
+  signal?: AbortSignal
 ) =>
   request<RouteResult>(
-    `/route?from=${from.lat},${from.lng}&to=${to.lat},${to.lng}`
+    `/route?from=${from.lat},${from.lng}&to=${to.lat},${to.lng}`,
+    { signal }
   );
 
 // ---------- События (совместные поездки) ----------

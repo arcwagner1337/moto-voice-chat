@@ -133,6 +133,23 @@ export default function EventsScreen() {
     } catch {}
   };
 
+  // При открытии карты выбора — центрируем на текущей геолокации и ставим
+  // синий маркер «я здесь», чтобы не открывалась дефолтная Москва.
+  const centerPickerOnCurrent = async () => {
+    try {
+      let perm = (await Location.getForegroundPermissionsAsync()).status;
+      if (perm !== 'granted') {
+        perm = (await Location.requestForegroundPermissionsAsync()).status;
+      }
+      if (perm !== 'granted') return;
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude, longitude } = pos.coords;
+      mapPickRef.current?.injectJavaScript(
+        `window.centerOn && window.centerOn(${latitude}, ${longitude}); window.setHere && window.setHere(${latitude}, ${longitude}); true;`
+      );
+    } catch {}
+  };
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -509,9 +526,13 @@ export default function EventsScreen() {
             onLoadEnd={() => {
               mapPickRef.current?.injectJavaScript('window.setTapMode && window.setTapMode(true); true;');
               if (geo) {
+                // Уже выбранная точка — показать её и отцентрироваться на ней
                 mapPickRef.current?.injectJavaScript(
-                  `window.setRoute && window.setRoute([{lat:${geo.lat},lng:${geo.lng}}], '#22c55e', true); true;`
+                  `window.setRoute && window.setRoute([{lat:${geo.lat},lng:${geo.lng}}], '#22c55e', false); window.centerOn && window.centerOn(${geo.lat}, ${geo.lng}); true;`
                 );
+              } else {
+                // Точка ещё не выбрана — открыть карту на текущей геолокации
+                centerPickerOnCurrent();
               }
             }}
             style={{ flex: 1, backgroundColor: '#020617' }}

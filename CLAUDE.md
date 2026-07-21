@@ -233,3 +233,93 @@ pending_in) · `GET /friends` → `{friends,incoming,outgoing}` ·
   контексту). Сообщения коммитов — на русском.
 - НЕ коммить `server/*.db`, `server/*.log`, `dist/` (в `.gitignore`).
 - Owner сам отменяет неактуальные CI-раны; лишние билды не запускай без нужды.
+
+---
+
+# ЖУРНАЛ СЕССИИ 2026-07-22 (хендофф для нового чата)
+
+## Что сделано за большую сессию (всё в git, ветка `main`)
+
+Начали ~v2.0, дошли до **v2.7.3**. Версии = строка `subtitle` на дашборде
+(`app/(tabs)/index.tsx`). Всё, кроме медиа-батча, доставлено по OTA.
+
+- **Чаты** (`app/chat/[id].tsx`): ответы (свайп PanResponder + контекстное меню
+  по тапу), редактирование, удаление, кликабельные ссылки, авто-скролл при
+  отправке, вложения (📎). Realtime `chat:edited`/`chat:deleted`.
+- **Поиск по чатам** (`chats.tsx`), **меню участников групп** (список/удаление/
+  добавление; сервер `createdBy`, DELETE `/chats/:id/members/:userId`).
+- **Быстрый ответ из уведомления** (`notifications.ts` + `_layout.tsx`
+  `onBackgroundEvent`): notifee input-action.
+- **Звонок из чата** — скрытая случайная комната `call-<chatId>-<uuid>` (сервер
+  `POST /chats/:id/call` возвращает room; общий войс по имени не тронут).
+- **Карта**: 4 слоя циклом (тёмная/спутник/гибрид-с-дорогами Esri/светлая),
+  навигатор turn-by-turn (`/route` прокси к OSRM, HUD, пересчёт), шаринг точки
+  друзьям (`nav:waypoint`), просмотр заезда рисует трассу+треки участников
+  (`fitTo`), метки с фото/видео (📌).
+- **SOS** (`/sos`) — оповещение друзей с координатами + выбор получателей.
+- **Музыка** — синхронный Audius-плеер в голосовой комнате (`three.tsx`;
+  сервер `/music/search` + realtime `music:set/control/stop`), локальный мьют.
+- **Фон-геолокация** — авто-хендофф foreground→background (`map.tsx` AppState).
+- **Вкладка EVENTS** (`app/(tabs)/events.tsx`) — совместные поездки в ЧЧ:ММ,
+  присоединение; точка сбора (моя гео / тап по карте) + привязка маршрута +
+  фото карточки; авто-формат времени.
+- **Дашборд**: реальные индикаторы (убраны фейки), диалог OTA-обновления с
+  кнопкой «Скачать» (`Updates.checkForUpdateAsync`/`fetchUpdateAsync`/`reloadAsync`).
+- **Фикс refresh-петли** карты (стабильный `pushMarkers`), **фикс IP** локального
+  звонка (`two.tsx`: ретраи `getIpAddressAsync` + ручной ввод + 🔄).
+
+## Медиа-батч = НАТИВНЫЙ (нужен APK, не OTA)
+
+Добавлены нативные модули: `expo-image-picker`, `expo-file-system` (клиент),
+`multer` (сервер). Поэтому **`expo.version` поднят 1.0.0 → 1.1.0** (runtimeVersion
+развели). Плагин `expo-image-picker` в `app.json`.
+- Сервер: `POST /api/upload` (multer diskStorage → `server/uploads/`, отдаётся
+  `express.static('/uploads')`), колонки `messages.attachment_*`, `events.photo`,
+  таблица `map_pins` + `/pins` CRUD.
+- Клиент: `lib/pickMedia.ts` (`pickAndUpload`), `lib/api.ts` (`uploadFile`,
+  `mediaUrl`, типы `Attachment`/`MapPin`).
+- APK **v2.7.0** собран (CI run 29857620719, релиз-тег `apk-2.7.0`, debug-подпись).
+
+## Состояние доставки (ВАЖНО про runtime)
+
+- OTA-ветка `production` расщеплена по runtime:
+  - **1.0.0** — старые бинарники, последний апдейт **v2.6.1** (без медиа).
+  - **1.1.0** — новый APK (v2.7.0), последний апдейт **v2.7.3**.
+- Публикация OTA: `bun run ota` НЕ работает (нет `--message`); вручную:
+  `npx expo export --output-dir dist --platform android --platform ios --no-bytecode`
+  затем `npx eas update --branch production --skip-bundler --input-dir dist --message "..."`.
+- Бэкенд под systemd `meshvoice.service` (Restart=always). После правок
+  `server/src`: `cd server && npm run build && systemctl --user restart meshvoice.service`.
+
+## ⛔️ ИЗВЕСТНЫЕ БАГИ / TODO (по приоритету)
+
+1. **КРИТИЧНО — загрузка медиа (`/api/upload`) виснет.** multipart-тело >~16 КБ
+   зависает, ответ не приходит (таймаут). Диагностика: воспроизводится на
+   ИЗОЛИРОВАННОМ чистом `express + multer` (без нашего кода и без `express.json`);
+   диск не полон; 15–25 КБ проходят, 50 КБ+ виснут (порог = highWaterMark 16 КБ,
+   т.е. backpressure — парсер не дренирует поток). Вывод: баг **multer@2.2.0** в
+   связке **Express 5 + Node 24**. НЕ туннель (туннель мелкое отдаёт за 0.6с).
+   **Фикс:** заменить multer на `busboy` напрямую или `formidable`, ЛИБО проверить
+   совместимость (понизить/поднять multer, или Express 4). Затронуто: вложения
+   чата, фото событий, метки. Репро:
+   `curl -sX POST localhost:3000/api/upload -H "Authorization: Bearer <tok>" -H "Expect:" -F file=@<100kb-файл>` → зависает.
+2. **Клавиатура в форме метки** (`map.tsx`, модалка `pinDraft`) — добавлен
+   `KeyboardAvoidingView`, но на Android в прозрачной модалке `behavior=height`
+   ненадёжен, отступа нет. Нужен нормальный фикс (bottom-sheet, или
+   `Modal` не transparent + adjustResize).
+3. **Выбор точки события на карте** должен открывать карту **на текущей
+   геолокации** и показывать маркер текущего гео (сейчас дефолтный вид Москвы).
+   Файл: `events.tsx` модалка `mapPickOpen`, в `onLoadEnd` дёрнуть
+   `Location.getCurrentPositionAsync` → `window.centerOn`.
+4. **Отмена построения маршрута** (навигатор, `map.tsx buildRoad`) — длинные/
+   ошибочные маршруты (напр. НСК→МСК) строятся долго/криво; добавить
+   AbortController в `getRoad` и кнопку «Отмена» на время `buildingRoad`.
+5. После фикса #1 — проверить на устройстве загрузку фото/видео во всех трёх
+   местах и удаление меток.
+
+## Память агента
+
+`~/.claude/.../memory/`: `meshvoice-backend-hosting.md` (dev-tunnel),
+`meshvoice-db-safety.md` (боевая БД `server/meshvoice.db` не в git — не тестить
+на ней; тесты только на изолированной `DB_PATH`+порт). dev-tunnel URL в
+`lib/config.ts` (`BACKEND_URL`).

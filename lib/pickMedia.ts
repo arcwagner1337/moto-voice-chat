@@ -9,6 +9,7 @@ export async function pickAndUpload(allowVideo = false): Promise<Attachment | nu
   const res = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: allowVideo ? ['images', 'videos'] : ['images'],
     quality: 0.4, // сильнее жмём — через dev-tunnel аплоад узкий
+    videoMaxDuration: 120, // ограничиваем ролик, чтобы не упереться в лимит 60 МБ
   });
   if (res.canceled || !res.assets?.length) return null;
   const a = res.assets[0];

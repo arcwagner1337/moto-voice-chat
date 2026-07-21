@@ -33,7 +33,9 @@ import {
   removeChatMember,
   startChatCall,
   mediaUrl,
+  uploadFile,
 } from '../../lib/api';
+import { Audio } from 'expo-av';
 import { pickAndUpload } from '../../lib/pickMedia';
 import { getSocialSocket } from '../../lib/socialSocket';
 import { setOpenChat, cancelChatNotification } from '../../lib/notifications';
@@ -57,6 +59,12 @@ export default function ChatScreen() {
   const [attachment, setAttachment] = useState<Attachment | null>(null);
   const [uploading, setUploading] = useState(false);
 
+  // Голосовые сообщения (запись через expo-av)
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recSecs, setRecSecs] = useState(0);
+
   const attachMedia = async () => {
     setUploading(true);
     try {
@@ -71,6 +79,81 @@ export default function ChatScreen() {
       setUploading(false);
     }
   };
+
+  const fmtRec = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  const clearRecTimer = () => {
+    if (recTimerRef.current) {
+      clearInterval(recTimerRef.current);
+      recTimerRef.current = null;
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const perm = await Audio.requestPermissionsAsync();
+      if (!perm.granted) return Alert.alert('Нет доступа', 'Разрешите микрофон для голосовых сообщений.');
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const rec = new Audio.Recording();
+      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      await rec.startAsync();
+      recordingRef.current = rec;
+      setRecSecs(0);
+      setIsRecording(true);
+      recTimerRef.current = setInterval(() => setRecSecs((s) => s + 1), 1000);
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось начать запись');
+    }
+  };
+
+  const stopRecordingAndSend = async () => {
+    const rec = recordingRef.current;
+    recordingRef.current = null;
+    clearRecTimer();
+    setIsRecording(false);
+    const secs = recSecs;
+    setRecSecs(0);
+    if (!rec) return;
+    try {
+      await rec.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      const uri = rec.getURI();
+      if (!uri || secs < 1) return; // слишком короткое — не отправляем
+      setSending(true);
+      const up = await uploadFile(uri, 'voice.m4a', 'audio/m4a');
+      const att: Attachment = { url: up.url, type: up.type || 'audio/m4a' };
+      const msg = await sendChatMessage(chatId, '', undefined, att);
+      setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      scrollToEnd();
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const cancelRecording = async () => {
+    const rec = recordingRef.current;
+    recordingRef.current = null;
+    clearRecTimer();
+    setIsRecording(false);
+    setRecSecs(0);
+    if (rec) {
+      try {
+        await rec.stopAndUnloadAsync();
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      } catch {}
+    }
+  };
+
+  // Подчистить запись, если ушли с экрана во время неё
+  useEffect(() => {
+    return () => {
+      clearRecTimer();
+      recordingRef.current?.stopAndUnloadAsync().catch(() => {});
+      recordingRef.current = null;
+    };
+  }, []);
 
   const scrollToEnd = useCallback((animated = true) => {
     requestAnimationFrame(() => flatListRef.current?.scrollToEnd({ animated }));
@@ -474,30 +557,61 @@ export default function ChatScreen() {
         )}
 
         {/* Ввод */}
-        <View className="flex-row items-end p-4 pt-2 gap-2">
-          <TouchableOpacity
-            onPress={attachMedia}
-            disabled={uploading}
-            className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-900 border border-slate-800"
-          >
-            {uploading ? <ActivityIndicator color="#22d3ee" size="small" /> : <Text className="text-xl">📎</Text>}
-          </TouchableOpacity>
-          <TextInput
-            multiline
-            placeholder={editing ? 'Изменить сообщение...' : 'Сообщение...'}
-            placeholderTextColor="#475569"
-            className="flex-1 bg-slate-900 text-white p-4 py-3 rounded-2xl border border-slate-800 min-h-[52px] max-h-32"
-            value={text}
-            onChangeText={setText}
-          />
-          <TouchableOpacity
-            onPress={send}
-            disabled={sending}
-            className={`h-14 w-14 rounded-2xl items-center justify-center ${sending ? 'bg-slate-700' : editing ? 'bg-emerald-600' : 'bg-cyan-600'}`}
-          >
-            <Text className="text-white text-xl">{editing ? '✓' : '🚀'}</Text>
-          </TouchableOpacity>
-        </View>
+        {isRecording ? (
+          <View className="flex-row items-center p-4 pt-2 gap-2">
+            <TouchableOpacity
+              onPress={cancelRecording}
+              className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-900 border border-red-500/40"
+            >
+              <Text className="text-lg">🗑</Text>
+            </TouchableOpacity>
+            <View className="flex-1 flex-row items-center bg-slate-900 rounded-2xl border border-red-500/40 px-4 h-14">
+              <View className="w-3 h-3 rounded-full bg-red-500 mr-3" />
+              <Text className="text-white font-mono flex-1">Запись… {fmtRec(recSecs)}</Text>
+            </View>
+            <TouchableOpacity
+              onPress={stopRecordingAndSend}
+              disabled={sending}
+              className={`h-14 w-14 rounded-2xl items-center justify-center ${sending ? 'bg-slate-700' : 'bg-cyan-600'}`}
+            >
+              <Text className="text-white text-xl">🚀</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View className="flex-row items-end p-4 pt-2 gap-2">
+            <TouchableOpacity
+              onPress={attachMedia}
+              disabled={uploading}
+              className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-900 border border-slate-800"
+            >
+              {uploading ? <ActivityIndicator color="#22d3ee" size="small" /> : <Text className="text-xl">📎</Text>}
+            </TouchableOpacity>
+            <TextInput
+              multiline
+              placeholder={editing ? 'Изменить сообщение...' : 'Сообщение...'}
+              placeholderTextColor="#475569"
+              className="flex-1 bg-slate-900 text-white p-4 py-3 rounded-2xl border border-slate-800 min-h-[52px] max-h-32"
+              value={text}
+              onChangeText={setText}
+            />
+            {text.trim() || editing || attachment ? (
+              <TouchableOpacity
+                onPress={send}
+                disabled={sending}
+                className={`h-14 w-14 rounded-2xl items-center justify-center ${sending ? 'bg-slate-700' : editing ? 'bg-emerald-600' : 'bg-cyan-600'}`}
+              >
+                <Text className="text-white text-xl">{editing ? '✓' : '🚀'}</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={startRecording}
+                className="h-14 w-14 rounded-2xl items-center justify-center bg-slate-800 border border-slate-700"
+              >
+                <Text className="text-xl">🎤</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
       </KeyboardAvoidingView>
 
       {/* Контекстное меню сообщения */}
@@ -586,6 +700,82 @@ function MessageText({ text, mine }: { text: string; mine: boolean }) {
   );
 }
 
+// Плеер голосового сообщения: сам грузит и проигрывает аудио внутри пузыря
+function VoicePlayer({ url, mine }: { url: string; mine: boolean }) {
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [pos, setPos] = useState(0);
+  const [dur, setDur] = useState(0);
+
+  useEffect(() => {
+    return () => {
+      soundRef.current?.unloadAsync().catch(() => {});
+      soundRef.current = null;
+    };
+  }, []);
+
+  const fmt = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+
+  const toggle = async () => {
+    try {
+      if (soundRef.current) {
+        const st = await soundRef.current.getStatusAsync();
+        if (st.isLoaded && st.isPlaying) await soundRef.current.pauseAsync();
+        else await soundRef.current.playAsync();
+        return;
+      }
+      setLoading(true);
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: url },
+        { shouldPlay: true },
+        (st) => {
+          if (!st.isLoaded) return;
+          setPos(st.positionMillis || 0);
+          setDur(st.durationMillis || 0);
+          setPlaying(st.isPlaying);
+          if (st.didJustFinish) {
+            setPlaying(false);
+            setPos(0);
+            soundRef.current?.setPositionAsync(0).catch(() => {});
+          }
+        }
+      );
+      soundRef.current = sound;
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось воспроизвести голосовое');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pct = dur ? Math.min(100, (pos / dur) * 100) : 0;
+  const accent = mine ? 'bg-cyan-200' : 'bg-cyan-400';
+  const track = mine ? 'bg-cyan-900' : 'bg-slate-600';
+
+  return (
+    <TouchableOpacity onPress={toggle} className="flex-row items-center py-1 mb-1" style={{ minWidth: 180 }}>
+      {loading ? (
+        <ActivityIndicator color={mine ? '#a5f3fc' : '#22d3ee'} size="small" style={{ marginRight: 10, width: 26 }} />
+      ) : (
+        <Text className="text-2xl mr-2" style={{ width: 26 }}>{playing ? '⏸️' : '▶️'}</Text>
+      )}
+      <View className="flex-1">
+        <View className={`h-1 rounded-full overflow-hidden ${track}`}>
+          <View className={`h-1 rounded-full ${accent}`} style={{ width: `${pct}%` }} />
+        </View>
+        <Text className={`text-[9px] mt-1 ${mine ? 'text-cyan-200' : 'text-slate-400'}`}>
+          🎤 {dur ? `${fmt(pos)} / ${fmt(dur)}` : 'Голосовое'}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 // Пузырь сообщения: свайп-вправо → ответ, тап → контекстное меню
 function MessageBubble({
   message,
@@ -651,25 +841,29 @@ function MessageBubble({
             </View>
           )}
           {message.attachment && (
-            <TouchableOpacity
-              onPress={() => Linking.openURL(mediaUrl(message.attachment!.url)).catch(() => {})}
-              className="mb-1"
-            >
-              {message.attachment.type.startsWith('image') ? (
-                <Image
-                  source={{ uri: mediaUrl(message.attachment.url) }}
-                  className="w-52 h-52 rounded-xl"
-                  resizeMode="cover"
-                />
-              ) : (
-                <View className="flex-row items-center p-3 bg-slate-900/60 rounded-xl">
-                  <Text className="text-xl mr-2">{message.attachment.type.startsWith('video') ? '🎬' : '📎'}</Text>
-                  <Text className="text-cyan-300 text-xs underline">
-                    {message.attachment.type.startsWith('video') ? 'Открыть видео' : 'Открыть файл'}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
+            message.attachment.type.startsWith('audio') ? (
+              <VoicePlayer url={mediaUrl(message.attachment.url)} mine={mine} />
+            ) : (
+              <TouchableOpacity
+                onPress={() => Linking.openURL(mediaUrl(message.attachment!.url)).catch(() => {})}
+                className="mb-1"
+              >
+                {message.attachment.type.startsWith('image') ? (
+                  <Image
+                    source={{ uri: mediaUrl(message.attachment.url) }}
+                    className="w-52 h-52 rounded-xl"
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View className="flex-row items-center p-3 bg-slate-900/60 rounded-xl">
+                    <Text className="text-xl mr-2">{message.attachment.type.startsWith('video') ? '🎬' : '📎'}</Text>
+                    <Text className="text-cyan-300 text-xs underline">
+                      {message.attachment.type.startsWith('video') ? 'Открыть видео' : 'Открыть файл'}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )
           )}
           {!!message.text && <MessageText text={message.text} mine={mine} />}
           <Text className={`text-[8px] mt-1 ${mine ? 'text-cyan-300' : 'text-slate-500'}`}>

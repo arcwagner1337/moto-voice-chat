@@ -1,6 +1,7 @@
 import http from 'http';
 import https from 'https';
 import fs from 'fs';
+import path from 'path';
 import express from 'express';
 import cors from 'cors';
 import { Server } from 'socket.io';
@@ -32,6 +33,11 @@ app.use(express.json({ limit: '256kb' }));
 app.get('/', (_req, res) => {
   res.json({ ok: true, service: 'meshvoice-server' });
 });
+
+// Загруженные медиа (вложения чата, фото событий, метки на карте)
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/uploads', express.static(uploadsDir, { maxAge: '7d' }));
 
 app.use('/api', api);
 

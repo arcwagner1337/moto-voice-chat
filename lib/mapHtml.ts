@@ -166,6 +166,28 @@ export const MAP_HTML = `<!DOCTYPE html>
     if (fit && latlngs.length > 1) map.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] });
   }
 
+  // Метки пользователей (с фото/видео): клик по метке уходит в приложение
+  var pinsLayer = null;
+  function setPins(list) {
+    if (pinsLayer) { map.removeLayer(pinsLayer); pinsLayer = null; }
+    if (!list || !list.length) return;
+    var g = L.layerGroup();
+    list.forEach(function (p) {
+      var m = L.marker([p.lat, p.lng], { icon: L.divIcon({
+        html: '<div style="font-size:24px;filter:drop-shadow(0 1px 2px #000)">📌</div>',
+        className: '', iconSize: [24, 24], iconAnchor: [12, 22] }) });
+      m.on('click', function () {
+        if (window.ReactNativeWebView) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'pin', id: p.id }));
+        }
+      });
+      g.addLayer(m);
+    });
+    pinsLayer = g;
+    g.addTo(map);
+  }
+  window.setPins = setPins;
+
   // Режим разметки: тапы по карте уходят в приложение
   var tapMode = false;
   function setTapMode(on) { tapMode = on; }

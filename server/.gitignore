@@ -1,2 +1,3 @@
 .jwt-secret
 meshvoice.db*
+uploads/

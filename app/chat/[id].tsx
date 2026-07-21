@@ -14,11 +14,13 @@ import {
   Animated,
   PanResponder,
   Linking,
+  Image,
 } from 'react-native';
 import {
   ChatMessage,
   ChatSummary,
   SocialUser,
+  Attachment,
   getSavedUser,
   getChat,
   getMessages,
@@ -30,7 +32,9 @@ import {
   addChatMembers,
   removeChatMember,
   startChatCall,
+  mediaUrl,
 } from '../../lib/api';
+import { pickAndUpload } from '../../lib/pickMedia';
 import { getSocialSocket } from '../../lib/socialSocket';
 import { setOpenChat, cancelChatNotification } from '../../lib/notifications';
 
@@ -46,10 +50,27 @@ export default function ChatScreen() {
   const [loading, setLoading] = useState(true);
   const flatListRef = useRef<any>(null);
 
-  // Ответ / редактирование / контекстное меню
+  // Ответ / редактирование / контекстное меню / вложение
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [menuMsg, setMenuMsg] = useState<ChatMessage | null>(null);
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const attachMedia = async () => {
+    setUploading(true);
+    try {
+      const a = await pickAndUpload(true);
+      if (a) {
+        setAttachment(a);
+        setEditing(null); // к правке файл не цепляем
+      }
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const scrollToEnd = useCallback((animated = true) => {
     requestAnimationFrame(() => flatListRef.current?.scrollToEnd({ animated }));
@@ -232,26 +253,31 @@ export default function ChatScreen() {
 
   const send = async () => {
     const t = text.trim();
-    if (!t || sending) return;
+    const att = attachment;
+    if ((!t && !att) || sending) return;
     const editingMsg = editing;
     const replyMsg = replyingTo;
     setSending(true);
     setText('');
     setEditing(null);
     setReplyingTo(null);
+    setAttachment(null);
     try {
       if (editingMsg) {
         const msg = await editChatMessage(chatId, editingMsg.id, t);
         setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)));
       } else {
-        const msg = await sendChatMessage(chatId, t, replyMsg?.id);
+        const msg = await sendChatMessage(chatId, t, replyMsg?.id, att);
         setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
         scrollToEnd();
       }
     } catch (e) {
       setText(t);
       if (editingMsg) setEditing(editingMsg);
-      else setReplyingTo(replyMsg);
+      else {
+        setReplyingTo(replyMsg);
+        setAttachment(att);
+      }
       Alert.alert('Ошибка', (e as Error).message);
     } finally {
       setSending(false);
@@ -432,8 +458,30 @@ export default function ChatScreen() {
           </View>
         )}
 
+        {/* Превью прикреплённого файла */}
+        {attachment && (
+          <View className="flex-row items-center mx-4 mb-1 px-3 py-2 bg-slate-900 border-l-2 border-cyan-500 rounded-lg">
+            {attachment.type.startsWith('image') ? (
+              <Image source={{ uri: mediaUrl(attachment.url) }} className="w-9 h-9 rounded mr-2" />
+            ) : (
+              <Text className="text-lg mr-2">{attachment.type.startsWith('video') ? '🎬' : '📎'}</Text>
+            )}
+            <Text className="flex-1 text-slate-300 text-xs" numberOfLines={1}>Вложение готово к отправке</Text>
+            <TouchableOpacity onPress={() => setAttachment(null)} className="px-2">
+              <Text className="text-slate-500 font-bold">✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Ввод */}
         <View className="flex-row items-end p-4 pt-2 gap-2">
+          <TouchableOpacity
+            onPress={attachMedia}
+            disabled={uploading}
+            className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-900 border border-slate-800"
+          >
+            {uploading ? <ActivityIndicator color="#22d3ee" size="small" /> : <Text className="text-xl">📎</Text>}
+          </TouchableOpacity>
           <TextInput
             multiline
             placeholder={editing ? 'Изменить сообщение...' : 'Сообщение...'}
@@ -602,7 +650,28 @@ function MessageBubble({
               </Text>
             </View>
           )}
-          <MessageText text={message.text} mine={mine} />
+          {message.attachment && (
+            <TouchableOpacity
+              onPress={() => Linking.openURL(mediaUrl(message.attachment!.url)).catch(() => {})}
+              className="mb-1"
+            >
+              {message.attachment.type.startsWith('image') ? (
+                <Image
+                  source={{ uri: mediaUrl(message.attachment.url) }}
+                  className="w-52 h-52 rounded-xl"
+                  resizeMode="cover"
+                />
+              ) : (
+                <View className="flex-row items-center p-3 bg-slate-900/60 rounded-xl">
+                  <Text className="text-xl mr-2">{message.attachment.type.startsWith('video') ? '🎬' : '📎'}</Text>
+                  <Text className="text-cyan-300 text-xs underline">
+                    {message.attachment.type.startsWith('video') ? 'Открыть видео' : 'Открыть файл'}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
+          {!!message.text && <MessageText text={message.text} mine={mine} />}
           <Text className={`text-[8px] mt-1 ${mine ? 'text-cyan-300' : 'text-slate-500'}`}>
             {message.editedAt ? 'изм. · ' : ''}
             {fmtTime(message.createdAt)}

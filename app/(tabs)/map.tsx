@@ -1,6 +1,6 @@
 import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState, Modal } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState, Modal, Image, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -14,9 +14,15 @@ import {
   TrackPoint,
   NavStep,
   SosAlert,
+  MapPin,
+  Attachment,
   getRoad,
   sendSos,
   getFriends,
+  getPins,
+  createPin,
+  deletePin,
+  mediaUrl,
   getSavedUser,
   getFriendLocations,
   getActiveRides,
@@ -42,6 +48,7 @@ import {
   isBackgroundTrackingActive,
 } from '../../lib/backgroundLocation';
 import { MAP_HTML } from '../../lib/mapHtml';
+import { pickAndUpload } from '../../lib/pickMedia';
 
 // Трансляция позиции включается сама; флаг хранит явный отказ пользователя
 const SHARING_OFF_KEY = '@map_sharing_off';
@@ -193,6 +200,25 @@ export default function MapScreen() {
     offRoute: number;
   } | null>(null);
 
+  // Метки на карте с фото/видео
+  const [pins, setPins] = useState<MapPin[]>([]);
+  const pinsRef = useRef<MapPin[]>([]);
+  useEffect(() => {
+    pinsRef.current = pins;
+  }, [pins]);
+  const [addingPin, setAddingPin] = useState(false);
+  const addingPinRef = useRef(false);
+  useEffect(() => {
+    addingPinRef.current = addingPin;
+  }, [addingPin]);
+  const [pinDraft, setPinDraft] = useState<{ lat: number; lng: number } | null>(null);
+  const [pinTitle, setPinTitle] = useState('');
+  const [pinNote, setPinNote] = useState('');
+  const [pinMedia, setPinMedia] = useState<Attachment | null>(null);
+  const [savingPin, setSavingPin] = useState(false);
+  const [uploadingPinMedia, setUploadingPinMedia] = useState(false);
+  const [viewingPin, setViewingPin] = useState<MapPin | null>(null);
+
   // SOS: экстренное оповещение друзей. Пустой список получателей = всем друзьям.
   const [sosRecipients, setSosRecipients] = useState<number[]>([]);
   const [sosSettings, setSosSettings] = useState(false);
@@ -225,9 +251,9 @@ export default function MapScreen() {
   // Тапы по карте нужны и для разметки трассы, и для выбора точки навигатора
   useEffect(() => {
     editingRef.current = editingTrack;
-    const tap = editingTrack || pickingDest;
+    const tap = editingTrack || pickingDest || addingPin;
     webRef.current?.injectJavaScript(`window.setTapMode && window.setTapMode(${tap}); true;`);
-  }, [editingTrack, pickingDest]);
+  }, [editingTrack, pickingDest, addingPin]);
   useEffect(() => {
     pickingDestRef.current = pickingDest;
   }, [pickingDest]);
@@ -435,9 +461,20 @@ export default function MapScreen() {
   const onWebViewMessage = (event: any) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === 'pin') {
+        const p = pinsRef.current.find((x) => x.id === msg.id);
+        if (p) setViewingPin(p);
+        return;
+      }
       if (msg.type !== 'tap') return;
       if (editingRef.current) {
         setDraftTrack((prev) => (prev.length >= 50 ? prev : [...prev, { lat: msg.lat, lng: msg.lng }]));
+      } else if (addingPinRef.current) {
+        setAddingPin(false);
+        setPinDraft({ lat: msg.lat, lng: msg.lng });
+        setPinTitle('');
+        setPinNote('');
+        setPinMedia(null);
       } else if (pickingDestRef.current) {
         setPickingDest(false);
         buildRoad({ lat: msg.lat, lng: msg.lng, name: 'Точка на карте' });
@@ -589,6 +626,76 @@ export default function MapScreen() {
     }
   }, []);
 
+  const refreshPins = useCallback(async () => {
+    try {
+      setPins(await getPins());
+    } catch {
+      // оставляем что было
+    }
+  }, []);
+
+  // Отрисовка меток на карте
+  useEffect(() => {
+    const list = pins.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng }));
+    webRef.current?.injectJavaScript(`window.setPins && window.setPins(${JSON.stringify(list)}); true;`);
+  }, [pins]);
+
+  const pickPinMedia = async () => {
+    setUploadingPinMedia(true);
+    try {
+      const a = await pickAndUpload(true);
+      if (a) setPinMedia(a);
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    } finally {
+      setUploadingPinMedia(false);
+    }
+  };
+
+  const savePin = async () => {
+    if (!pinDraft) return;
+    if (!pinTitle.trim()) return Alert.alert('Ошибка', 'Введите название метки');
+    setSavingPin(true);
+    try {
+      await createPin(pinDraft.lat, pinDraft.lng, pinTitle.trim(), pinNote.trim() || undefined, pinMedia);
+      setPinDraft(null);
+      setPinTitle('');
+      setPinNote('');
+      setPinMedia(null);
+      refreshPins();
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    } finally {
+      setSavingPin(false);
+    }
+  };
+
+  const cancelPinDraft = () => {
+    setPinDraft(null);
+    setPinTitle('');
+    setPinNote('');
+    setPinMedia(null);
+  };
+
+  const removePin = (p: MapPin) => {
+    Alert.alert('Удалить метку?', `«${p.title}» удалится.`, [
+      { text: 'Отмена', style: 'cancel' },
+      {
+        text: 'Удалить',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deletePin(p.id);
+            setViewingPin(null);
+            refreshPins();
+          } catch (e) {
+            Alert.alert('Ошибка', (e as Error).message);
+          }
+        },
+      },
+    ]);
+  };
+
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -615,6 +722,7 @@ export default function MapScreen() {
         if (cur) getRide(cur.id).then(setActiveRide).catch(() => {});
       };
       const onRoutesUpdate = () => refreshRoutes();
+      const onPinsUpdate = () => refreshPins();
       const onWaypoint = (w: { from?: SocialUser; lat: number; lng: number; name: string }) => {
         const who = w.from ? `${w.from.avatar} ${w.from.displayName}` : 'Друг';
         Alert.alert(
@@ -657,6 +765,7 @@ export default function MapScreen() {
           refreshFriendLocations();
           refreshRides();
           refreshRoutes();
+          refreshPins();
           sock = await getSocialSocket();
           if (sock && active) {
             sock.on('loc:friend', onFriendLoc);
@@ -665,6 +774,7 @@ export default function MapScreen() {
             sock.on('routes:update', onRoutesUpdate);
             sock.on('nav:waypoint', onWaypoint);
             sock.on('sos:alert', onSos);
+            sock.on('pins:update', onPinsUpdate);
           }
         }
       })();
@@ -678,9 +788,10 @@ export default function MapScreen() {
           sock.off('routes:update', onRoutesUpdate);
           sock.off('nav:waypoint', onWaypoint);
           sock.off('sos:alert', onSos);
+          sock.off('pins:update', onPinsUpdate);
         }
       };
-    }, [pushMarkers, refreshFriendLocations, refreshRides, refreshRoutes])
+    }, [pushMarkers, refreshFriendLocations, refreshRides, refreshRoutes, refreshPins])
   );
 
   // ---------- Действия ----------
@@ -1089,6 +1200,8 @@ export default function MapScreen() {
               onLoadEnd={() => {
                 pushMarkers();
                 pushTrack();
+                const pinList = pinsRef.current.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng }));
+                webRef.current?.injectJavaScript(`window.setPins && window.setPins(${JSON.stringify(pinList)}); true;`);
                 if (mapLayer !== 'dark') {
                   webRef.current?.injectJavaScript(
                     `window.setBaseLayer && window.setBaseLayer(${JSON.stringify(mapLayer)}); true;`
@@ -1187,6 +1300,30 @@ export default function MapScreen() {
               >
                 <Text className="text-base">{pickingDest ? '✕' : '📍'}</Text>
               </TouchableOpacity>
+            )}
+
+            {/* Кнопка «добавить метку» */}
+            {!roadNav && !editingTrack && !pickingDest && (
+              <TouchableOpacity
+                onPress={() => setAddingPin((v) => !v)}
+                className={`absolute bottom-28 right-3 w-10 h-10 rounded-xl items-center justify-center border ${
+                  addingPin ? 'bg-amber-500 border-amber-300' : 'bg-slate-900/90 border-cyan-500/50'
+                }`}
+              >
+                <Text className="text-base">{addingPin ? '✕' : '📌'}</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Подсказка режима метки */}
+            {addingPin && (
+              <View
+                style={{ top: insets.top + 12 }}
+                className="absolute left-3 right-16 bg-amber-950/95 border border-amber-500/60 rounded-2xl p-3"
+              >
+                <Text className="text-amber-300 text-xs font-bold text-center">
+                  📌 Тапните на карте место — добавлю метку с фото/видео
+                </Text>
+              </View>
             )}
 
             {/* SOS: тап — оповестить, долгий тап — выбрать получателей */}
@@ -1813,6 +1950,108 @@ export default function MapScreen() {
               </TouchableOpacity>
             </View>
           </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Форма новой метки */}
+      <Modal visible={!!pinDraft} transparent animationType="slide" onRequestClose={cancelPinDraft}>
+        <View className="flex-1 bg-black/60 justify-end">
+          <View className="bg-slate-900 rounded-t-3xl border-t border-amber-500/40 p-4 pb-8">
+            <View className="items-center mb-2"><View className="w-10 h-1 bg-slate-700 rounded-full" /></View>
+            <Text className="text-amber-400 font-bold uppercase text-xs tracking-widest mb-3">📌 Новая метка</Text>
+            <TextInput
+              placeholder="Название (например: Красивый вид)"
+              placeholderTextColor="#475569"
+              className="text-white bg-slate-950 p-3 rounded-xl border border-slate-800 mb-2"
+              value={pinTitle}
+              onChangeText={setPinTitle}
+            />
+            <TextInput
+              placeholder="Описание (необязательно)"
+              placeholderTextColor="#475569"
+              className="text-white bg-slate-950 p-3 rounded-xl border border-slate-800 mb-2"
+              value={pinNote}
+              onChangeText={setPinNote}
+            />
+            <TouchableOpacity
+              onPress={() => (pinMedia ? setPinMedia(null) : pickPinMedia())}
+              disabled={uploadingPinMedia}
+              className={`flex-row items-center p-3 rounded-xl border mb-3 ${pinMedia ? 'bg-amber-500/10 border-amber-400' : 'bg-slate-950 border-slate-800'}`}
+            >
+              {uploadingPinMedia ? (
+                <ActivityIndicator color="#f59e0b" size="small" style={{ marginRight: 8 }} />
+              ) : pinMedia?.type.startsWith('image') ? (
+                <Image source={{ uri: mediaUrl(pinMedia.url) }} className="w-9 h-9 rounded mr-2" />
+              ) : (
+                <Text className="text-lg mr-2">{pinMedia ? '🎬' : '🖼'}</Text>
+              )}
+              <Text className={`text-[11px] font-bold flex-1 ${pinMedia ? 'text-amber-300' : 'text-slate-400'}`}>
+                {pinMedia ? 'Медиа прикреплено ✕' : 'Прикрепить фото / видео'}
+              </Text>
+            </TouchableOpacity>
+            <View className="flex-row gap-2">
+              <TouchableOpacity onPress={cancelPinDraft} className="p-3 px-5 rounded-2xl bg-slate-800 border border-slate-700 items-center justify-center">
+                <Text className="text-slate-300 font-bold text-[11px] uppercase">Отмена</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={savePin}
+                disabled={savingPin}
+                className="flex-1 p-3 rounded-2xl bg-amber-600 items-center justify-center flex-row"
+              >
+                {savingPin && <ActivityIndicator color="#fff" size="small" style={{ marginRight: 8 }} />}
+                <Text className="text-white font-bold text-[11px] uppercase">Сохранить метку</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Просмотр метки */}
+      <Modal visible={!!viewingPin} transparent animationType="fade" onRequestClose={() => setViewingPin(null)}>
+        <TouchableOpacity className="flex-1 bg-black/70 justify-center p-6" activeOpacity={1} onPress={() => setViewingPin(null)}>
+          {viewingPin && (
+            <View className="bg-slate-900 rounded-3xl border border-slate-700 overflow-hidden">
+              {viewingPin.media && (
+                <TouchableOpacity
+                  onPress={() => Linking.openURL(mediaUrl(viewingPin.media!.url)).catch(() => {})}
+                  activeOpacity={0.9}
+                >
+                  {viewingPin.media.type.startsWith('image') ? (
+                    <Image source={{ uri: mediaUrl(viewingPin.media.url) }} className="w-full h-56" resizeMode="cover" />
+                  ) : (
+                    <View className="w-full h-40 bg-slate-950 items-center justify-center">
+                      <Text className="text-4xl">🎬</Text>
+                      <Text className="text-cyan-300 text-xs underline mt-2">Открыть видео</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              )}
+              <View className="p-4">
+                <Text className="text-white font-bold text-lg">📌 {viewingPin.title}</Text>
+                {viewingPin.note && <Text className="text-slate-300 text-sm mt-1">{viewingPin.note}</Text>}
+                <Text className="text-slate-500 text-[10px] mt-2">
+                  {viewingPin.owner.avatar} {viewingPin.owner.displayName}
+                </Text>
+                <View className="flex-row gap-2 mt-3">
+                  <TouchableOpacity
+                    onPress={() => {
+                      const p = viewingPin;
+                      setViewingPin(null);
+                      buildRoad({ lat: p.lat, lng: p.lng, name: p.title });
+                    }}
+                    className="flex-1 p-3 rounded-2xl bg-sky-600 items-center"
+                  >
+                    <Text className="text-white font-bold text-[11px] uppercase">🧭 Маршрут сюда</Text>
+                  </TouchableOpacity>
+                  {viewingPin.owner.id === user?.id && (
+                    <TouchableOpacity onPress={() => removePin(viewingPin)} className="p-3 px-4 rounded-2xl bg-slate-950 border border-red-500/30 items-center">
+                      <Text className="text-[14px]">🗑</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            </View>
+          )}
         </TouchableOpacity>
       </Modal>
     </View>

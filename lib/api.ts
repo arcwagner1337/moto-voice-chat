@@ -25,6 +25,7 @@ export type ChatSummary = {
 };
 
 export type ReplyPreview = { id: number; text: string; senderName: string };
+export type Attachment = { url: string; type: string };
 
 export type ChatMessage = {
   id: number;
@@ -33,6 +34,7 @@ export type ChatMessage = {
   createdAt: number;
   editedAt?: number | null;
   replyTo?: ReplyPreview | null;
+  attachment?: Attachment | null;
   sender: SocialUser;
 };
 
@@ -67,6 +69,30 @@ export async function pingServer(timeoutMs = 6000): Promise<boolean> {
 
 export async function getToken(): Promise<string | null> {
   return AsyncStorage.getItem(TOKEN_KEY);
+}
+
+export type Upload = { url: string; type: string; name: string; size: number };
+
+// Загрузка файла (фото/видео) на сервер → относительный url в /uploads
+export async function uploadFile(uri: string, name: string, type: string): Promise<Upload> {
+  const base = await getApiBase();
+  const token = await getToken();
+  const form = new FormData();
+  form.append('file', { uri, name, type } as any);
+  const res = await fetch(`${base}/api/upload`, {
+    method: 'POST',
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: form,
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить файл');
+  return data;
+}
+
+// Относительный путь с сервера → полный URL для показа медиа
+export function mediaUrl(pathOrUrl: string): string {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  return BACKEND_URL.replace(/\/+$/, '') + pathOrUrl;
 }
 
 export async function getSavedUser(): Promise<SocialUser | null> {
@@ -181,10 +207,19 @@ export const getMessages = (chatId: number, before?: number) =>
     `/chats/${chatId}/messages${before ? `?before=${before}` : ''}`
   ).then((d) => d.messages);
 
-export const sendChatMessage = (chatId: number, text: string, replyTo?: number) =>
+export const sendChatMessage = (
+  chatId: number,
+  text: string,
+  replyTo?: number,
+  attachment?: Attachment | null
+) =>
   request<{ message: ChatMessage }>(`/chats/${chatId}/messages`, {
     method: 'POST',
-    body: { text, ...(replyTo ? { replyTo } : {}) },
+    body: {
+      text,
+      ...(replyTo ? { replyTo } : {}),
+      ...(attachment ? { attachmentUrl: attachment.url, attachmentType: attachment.type } : {}),
+    },
   }).then((d) => d.message);
 
 export const editChatMessage = (chatId: number, msgId: number, text: string) =>
@@ -252,7 +287,37 @@ export type CreateEventOpts = {
   lat?: number | null;
   lng?: number | null;
   routeId?: number | null;
+  photo?: string | null;
 };
+
+// ---------- Метки на карте (с фото/видео) ----------
+
+export type MapPin = {
+  id: number;
+  lat: number;
+  lng: number;
+  title: string;
+  note: string | null;
+  media: Attachment | null;
+  createdAt: number;
+  owner: SocialUser;
+};
+
+export const createPin = (
+  lat: number,
+  lng: number,
+  title: string,
+  note?: string,
+  media?: Attachment | null
+) =>
+  request<{ pin: MapPin }>('/pins', {
+    method: 'POST',
+    body: { lat, lng, title, note, mediaUrl: media?.url, mediaType: media?.type },
+  }).then((d) => d.pin);
+
+export const getPins = () => request<{ pins: MapPin[] }>('/pins').then((d) => d.pins);
+
+export const deletePin = (id: number) => request(`/pins/${id}`, { method: 'DELETE' });
 
 export const createEvent = (title: string, startAt: number, opts: CreateEventOpts = {}) =>
   request<{ event: EventInfo }>('/events', {

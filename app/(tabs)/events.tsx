@@ -8,6 +8,7 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  ImageBackground,
 } from 'react-native';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +17,7 @@ import {
   EventInfo,
   RouteInfo,
   SocialUser,
+  Attachment,
   getSavedUser,
   getEvents,
   createEvent,
@@ -23,7 +25,9 @@ import {
   leaveEvent,
   deleteEvent,
   getRoutes,
+  mediaUrl,
 } from '../../lib/api';
+import { pickAndUpload } from '../../lib/pickMedia';
 import { getSocialSocket } from '../../lib/socialSocket';
 
 // "ЧЧ:ММ" (сегодня, а если время уже прошло — на указанный день) → timestamp
@@ -60,7 +64,21 @@ export default function EventsScreen() {
   const [gettingGeo, setGettingGeo] = useState(false);
   const [myRoutes, setMyRoutes] = useState<RouteInfo[]>([]);
   const [routeId, setRouteId] = useState<number | null>(null);
+  const [photo, setPhoto] = useState<Attachment | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const attachPhoto = async () => {
+    setUploadingPhoto(true);
+    try {
+      const a = await pickAndUpload(false);
+      if (a) setPhoto(a);
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   const openCreate = async () => {
     setCreating(true);
@@ -135,6 +153,7 @@ export default function EventsScreen() {
         lat: geo?.lat ?? null,
         lng: geo?.lng ?? null,
         routeId,
+        photo: photo?.url ?? null,
       });
       setCreating(false);
       setTitle('');
@@ -143,6 +162,7 @@ export default function EventsScreen() {
       setTomorrow(false);
       setGeo(null);
       setRouteId(null);
+      setPhoto(null);
       refresh();
     } catch (e) {
       Alert.alert('Ошибка', (e as Error).message);
@@ -296,6 +316,18 @@ export default function EventsScreen() {
                   </View>
                 )}
 
+                {/* Фото карточки */}
+                <TouchableOpacity
+                  onPress={() => (photo ? setPhoto(null) : attachPhoto())}
+                  disabled={uploadingPhoto}
+                  className={`flex-row items-center justify-center p-3 rounded-xl border mb-3 ${photo ? 'bg-cyan-500/10 border-cyan-400' : 'bg-slate-950 border-slate-800'}`}
+                >
+                  {uploadingPhoto && <ActivityIndicator color="#22d3ee" size="small" style={{ marginRight: 8 }} />}
+                  <Text className={`text-[11px] font-bold ${photo ? 'text-cyan-300' : 'text-slate-400'}`}>
+                    {photo ? '🖼 Фото прикреплено ✕' : '🖼 Добавить фото карточки'}
+                  </Text>
+                </TouchableOpacity>
+
                 <TouchableOpacity
                   onPress={submit}
                   disabled={busy}
@@ -322,8 +354,9 @@ export default function EventsScreen() {
               </View>
             )}
 
-            {events.map((ev) => (
-              <View key={ev.id} className="p-4 bg-slate-900 rounded-2xl border border-slate-800 mb-2">
+            {events.map((ev) => {
+              const content = (
+                <>
                 <View className="flex-row items-start justify-between">
                   <View className="flex-1 mr-2">
                     <Text className="text-white font-bold text-base" numberOfLines={2}>
@@ -390,8 +423,23 @@ export default function EventsScreen() {
                     </Text>
                   </TouchableOpacity>
                 )}
-              </View>
-            ))}
+                </>
+              );
+              return ev.photo ? (
+                <ImageBackground
+                  key={ev.id}
+                  source={{ uri: mediaUrl(ev.photo) }}
+                  imageStyle={{ borderRadius: 16 }}
+                  className="rounded-2xl border border-slate-800 mb-2 overflow-hidden"
+                >
+                  <View className="p-4 bg-slate-950/65">{content}</View>
+                </ImageBackground>
+              ) : (
+                <View key={ev.id} className="p-4 bg-slate-900 rounded-2xl border border-slate-800 mb-2">
+                  {content}
+                </View>
+              );
+            })}
           </>
         )}
       </ScrollView>

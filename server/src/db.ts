@@ -45,13 +45,15 @@ CREATE TABLE IF NOT EXISTS chat_members (
 );
 
 CREATE TABLE IF NOT EXISTS messages (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  chat_id    INTEGER NOT NULL REFERENCES chats(id),
-  sender_id  INTEGER NOT NULL REFERENCES users(id),
-  text       TEXT    NOT NULL,
-  reply_to   INTEGER REFERENCES messages(id),
-  edited_at  INTEGER,
-  created_at INTEGER NOT NULL
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id         INTEGER NOT NULL REFERENCES chats(id),
+  sender_id       INTEGER NOT NULL REFERENCES users(id),
+  text            TEXT    NOT NULL,
+  reply_to        INTEGER REFERENCES messages(id),
+  edited_at       INTEGER,
+  attachment_url  TEXT,
+  attachment_type TEXT,
+  created_at      INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS rides (
@@ -114,6 +116,18 @@ CREATE TABLE IF NOT EXISTS event_members (
   PRIMARY KEY (event_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS map_pins (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  lat        REAL    NOT NULL,
+  lng        REAL    NOT NULL,
+  title      TEXT    NOT NULL,
+  note       TEXT,
+  media_url  TEXT,
+  media_type TEXT,
+  created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_friendships_to ON friendships(to_id, status);
 CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status);
@@ -137,6 +151,8 @@ const migrations = [
   'ALTER TABLE events ADD COLUMN lng REAL',
   'ALTER TABLE events ADD COLUMN route_id INTEGER',
   'ALTER TABLE events ADD COLUMN photo TEXT',
+  'ALTER TABLE messages ADD COLUMN attachment_url TEXT',
+  'ALTER TABLE messages ADD COLUMN attachment_type TEXT',
 ];
 for (const m of migrations) {
   try {

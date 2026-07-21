@@ -1,5 +1,8 @@
 import { Router } from 'express';
 import type { Response } from 'express';
+import path from 'path';
+import fs from 'fs';
+import multer from 'multer';
 import {
   db, publicUser, getUserById, areFriends, isChatMember, friendIdsOf, PublicUser,
   canSeeRoute, routeInfo, haversineMeters, eventInfo,
@@ -10,6 +13,27 @@ import { isOnline, notifyUser, getLiveLocation, storeLocation } from './realtime
 export const api = Router();
 
 const now = () => Date.now();
+
+// ---------- Загрузка медиа (вложения, фото событий, метки) ----------
+
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+fs.mkdirSync(uploadsDir, { recursive: true });
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadsDir),
+    filename: (_req, file, cb) => {
+      const ext = (path.extname(file.originalname || '') || '').slice(0, 10);
+      cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`);
+    },
+  }),
+  limits: { fileSize: 60 * 1024 * 1024 }, // 60 МБ — фото/короткое видео
+});
+
+api.post('/upload', requireAuth, upload.single('file'), (req, res) => {
+  const f = (req as any).file;
+  if (!f) return res.status(400).json({ error: 'Файл не получен' });
+  res.json({ url: `/uploads/${f.filename}`, type: f.mimetype, name: f.originalname || 'file', size: f.size });
+});
 
 // ---------- Аккаунты ----------
 
@@ -786,6 +810,7 @@ function messagePayload(r: any) {
     replyTo: r.reply_to
       ? { id: r.reply_to, text: r.reply_text ?? '', senderName: r.reply_sender ?? '' }
       : null,
+    attachment: r.attachment_url ? { url: r.attachment_url, type: r.attachment_type || '' } : null,
     sender: { id: r.sender_id, username: r.username, displayName: r.display_name, avatar: r.avatar },
   };
 }
@@ -814,7 +839,9 @@ api.post('/chats/:id/messages', requireAuth, (req, res) => {
   const chatId = Number(req.params.id);
   if (!isChatMember(chatId, userId)) return res.status(403).json({ error: 'Нет доступа' });
   const text = String(req.body?.text || '').trim();
-  if (!text) return res.status(400).json({ error: 'Пустое сообщение' });
+  const attachmentUrl = String(req.body?.attachmentUrl || '').trim() || null;
+  const attachmentType = String(req.body?.attachmentType || '').trim().slice(0, 60) || null;
+  if (!text && !attachmentUrl) return res.status(400).json({ error: 'Пустое сообщение' });
 
   // reply_to принимаем только если это сообщение из этого же чата
   let replyTo: number | null = Number(req.body?.replyTo) || null;
@@ -824,8 +851,8 @@ api.post('/chats/:id/messages', requireAuth, (req, res) => {
   }
 
   const result = db
-    .prepare('INSERT INTO messages (chat_id, sender_id, text, reply_to, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(chatId, userId, text.slice(0, 2000), replyTo, now());
+    .prepare('INSERT INTO messages (chat_id, sender_id, text, reply_to, attachment_url, attachment_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(chatId, userId, text.slice(0, 2000), replyTo, attachmentUrl, attachmentType, now());
 
   const message = loadMessage(Number(result.lastInsertRowid));
 
@@ -1064,10 +1091,11 @@ api.post('/events', requireAuth, (req, res) => {
     const r: any = db.prepare('SELECT user_id FROM routes WHERE id = ?').get(routeId);
     if (!r || r.user_id !== userId) routeId = null;
   }
+  const photo = String(req.body?.photo || '').trim() || null;
 
   const result = db
-    .prepare('INSERT INTO events (creator_id, title, note, place, lat, lng, route_id, start_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(userId, title.slice(0, 120), note, place, lat, lng, routeId, startAt, now());
+    .prepare('INSERT INTO events (creator_id, title, note, place, lat, lng, route_id, photo, start_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(userId, title.slice(0, 120), note, place, lat, lng, routeId, photo, startAt, now());
   const eventId = Number(result.lastInsertRowid);
   db.prepare('INSERT INTO event_members (event_id, user_id, joined_at) VALUES (?, ?, ?)').run(eventId, userId, now());
   for (const fid of friendIdsOf(userId)) notifyUser(fid, 'events:update', {});
@@ -1119,5 +1147,59 @@ api.delete('/events/:id', requireAuth, (req, res) => {
   db.prepare('DELETE FROM event_members WHERE event_id = ?').run(eventId);
   db.prepare('DELETE FROM events WHERE id = ?').run(eventId);
   for (const uid of audience) notifyUser(uid, 'events:update', {});
+  res.json({ ok: true });
+});
+
+// ---------- Метки на карте (с фото/видео) ----------
+
+function pinInfo(p: any) {
+  return {
+    id: p.id,
+    lat: p.lat,
+    lng: p.lng,
+    title: p.title,
+    note: p.note || null,
+    media: p.media_url ? { url: p.media_url, type: p.media_type || '' } : null,
+    createdAt: p.created_at,
+    owner: getUserById(p.user_id),
+  };
+}
+
+api.post('/pins', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  const title = String(req.body?.title || '').trim();
+  if (!isFinite(lat) || !isFinite(lng)) return res.status(400).json({ error: 'Нет координат' });
+  if (!title) return res.status(400).json({ error: 'Введите название метки' });
+  const note = String(req.body?.note || '').trim().slice(0, 500) || null;
+  const mediaUrl = String(req.body?.mediaUrl || '').trim() || null;
+  const mediaType = String(req.body?.mediaType || '').trim().slice(0, 60) || null;
+
+  const result = db
+    .prepare('INSERT INTO map_pins (user_id, lat, lng, title, note, media_url, media_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(userId, lat, lng, title.slice(0, 120), note, mediaUrl, mediaType, now());
+  for (const fid of friendIdsOf(userId)) notifyUser(fid, 'pins:update', {});
+  res.json({ pin: pinInfo(db.prepare('SELECT * FROM map_pins WHERE id = ?').get(Number(result.lastInsertRowid))) });
+});
+
+api.get('/pins', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const visible = [userId, ...friendIdsOf(userId)];
+  const placeholders = visible.map(() => '?').join(',');
+  const rows: any[] = db
+    .prepare(`SELECT * FROM map_pins WHERE user_id IN (${placeholders}) ORDER BY created_at DESC LIMIT 200`)
+    .all(...visible);
+  res.json({ pins: rows.map(pinInfo) });
+});
+
+api.delete('/pins/:id', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const pinId = Number(req.params.id);
+  const p: any = db.prepare('SELECT user_id FROM map_pins WHERE id = ?').get(pinId);
+  if (!p) return res.status(404).json({ error: 'Метка не найдена' });
+  if (p.user_id !== userId) return res.status(403).json({ error: 'Удалить может только автор' });
+  db.prepare('DELETE FROM map_pins WHERE id = ?').run(pinId);
+  for (const fid of friendIdsOf(userId)) notifyUser(fid, 'pins:update', {});
   res.json({ ok: true });
 });

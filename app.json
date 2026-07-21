@@ -2,7 +2,7 @@
   "expo": {
     "name": "MeshVoice",
     "slug": "moto-voice-chat",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "scheme": "my-app",
     "platforms": [
       "ios",
@@ -37,6 +37,12 @@
           "locationWhenInUsePermission": "Геопозиция нужна, чтобы показывать вас на карте друзей и считать статистику заездов.",
           "locationAlwaysAndWhenInUsePermission": "Фоновая геопозиция нужна, чтобы трекинг заезда продолжался при выключенном экране.",
           "isAndroidBackgroundLocationEnabled": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Доступ к галерее нужен, чтобы прикреплять фото и видео к сообщениям, событиям и меткам на карте."
         }
       ]
     ],

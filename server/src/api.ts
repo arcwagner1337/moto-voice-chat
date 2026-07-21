@@ -1056,10 +1056,18 @@ api.post('/events', requireAuth, (req, res) => {
   if (!isFinite(startAt) || startAt <= 0) return res.status(400).json({ error: 'Укажите время' });
   const note = String(req.body?.note || '').trim().slice(0, 500) || null;
   const place = String(req.body?.place || '').trim().slice(0, 120) || null;
+  const lat = isFinite(Number(req.body?.lat)) ? Number(req.body.lat) : null;
+  const lng = isFinite(Number(req.body?.lng)) ? Number(req.body.lng) : null;
+  // route_id принимаем, только если это маршрут этого пользователя
+  let routeId: number | null = Number(req.body?.routeId) || null;
+  if (routeId) {
+    const r: any = db.prepare('SELECT user_id FROM routes WHERE id = ?').get(routeId);
+    if (!r || r.user_id !== userId) routeId = null;
+  }
 
   const result = db
-    .prepare('INSERT INTO events (creator_id, title, note, place, start_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(userId, title.slice(0, 120), note, place, startAt, now());
+    .prepare('INSERT INTO events (creator_id, title, note, place, lat, lng, route_id, start_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(userId, title.slice(0, 120), note, place, lat, lng, routeId, startAt, now());
   const eventId = Number(result.lastInsertRowid);
   db.prepare('INSERT INTO event_members (event_id, user_id, joined_at) VALUES (?, ?, ?)').run(eventId, userId, now());
   for (const fid of friendIdsOf(userId)) notifyUser(fid, 'events:update', {});

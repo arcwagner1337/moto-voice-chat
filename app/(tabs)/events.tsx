@@ -1,4 +1,4 @@
-import { Stack, useFocusEffect } from 'expo-router';
+import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
   View,
@@ -9,10 +9,12 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../../components/ScreenHeader';
 import {
   EventInfo,
+  RouteInfo,
   SocialUser,
   getSavedUser,
   getEvents,
@@ -20,6 +22,7 @@ import {
   joinEvent,
   leaveEvent,
   deleteEvent,
+  getRoutes,
 } from '../../lib/api';
 import { getSocialSocket } from '../../lib/socialSocket';
 
@@ -41,6 +44,7 @@ function computeStartAt(hhmm: string, tomorrow: boolean): number | null {
 
 export default function EventsScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [user, setUser] = useState<SocialUser | null>(null);
   const [checked, setChecked] = useState(false);
   const [events, setEvents] = useState<EventInfo[]>([]);
@@ -52,7 +56,38 @@ export default function EventsScreen() {
   const [time, setTime] = useState('');
   const [place, setPlace] = useState('');
   const [tomorrow, setTomorrow] = useState(false);
+  const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
+  const [gettingGeo, setGettingGeo] = useState(false);
+  const [myRoutes, setMyRoutes] = useState<RouteInfo[]>([]);
+  const [routeId, setRouteId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const openCreate = async () => {
+    setCreating(true);
+    try {
+      const d = await getRoutes();
+      setMyRoutes(d.mine);
+    } catch {
+      setMyRoutes([]);
+    }
+  };
+
+  const attachMyLocation = async () => {
+    setGettingGeo(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Нет доступа', 'Разрешите геопозицию, чтобы прикрепить точку сбора.');
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось получить геопозицию.');
+    } finally {
+      setGettingGeo(false);
+    }
+  };
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -95,12 +130,19 @@ export default function EventsScreen() {
     if (!startAt) return Alert.alert('Ошибка', 'Время в формате ЧЧ:ММ, например 18:30');
     setBusy(true);
     try {
-      await createEvent(title.trim(), startAt, place.trim() || undefined);
+      await createEvent(title.trim(), startAt, {
+        place: place.trim() || undefined,
+        lat: geo?.lat ?? null,
+        lng: geo?.lng ?? null,
+        routeId,
+      });
       setCreating(false);
       setTitle('');
       setTime('');
       setPlace('');
       setTomorrow(false);
+      setGeo(null);
+      setRouteId(null);
       refresh();
     } catch (e) {
       Alert.alert('Ошибка', (e as Error).message);
@@ -164,7 +206,7 @@ export default function EventsScreen() {
           <ScreenHeader title="EVENTS" subtitle="ride_together" noMargin />
           {user && (
             <TouchableOpacity
-              onPress={() => setCreating((v) => !v)}
+              onPress={() => (creating ? setCreating(false) : openCreate())}
               className={`px-4 py-2 rounded-full border ${creating ? 'bg-slate-800 border-slate-700' : 'bg-cyan-600 border-cyan-500'}`}
             >
               <Text className="text-white text-[10px] font-bold uppercase">{creating ? 'Отмена' : '+ Событие'}</Text>
@@ -217,10 +259,43 @@ export default function EventsScreen() {
                 <TextInput
                   placeholder="Место сбора (необязательно)"
                   placeholderTextColor="#475569"
-                  className="text-white bg-slate-950 p-3 rounded-xl border border-slate-800 mb-3"
+                  className="text-white bg-slate-950 p-3 rounded-xl border border-slate-800 mb-2"
                   value={place}
                   onChangeText={setPlace}
                 />
+
+                {/* Точка сбора на карте */}
+                <TouchableOpacity
+                  onPress={() => (geo ? setGeo(null) : attachMyLocation())}
+                  disabled={gettingGeo}
+                  className={`flex-row items-center justify-center p-3 rounded-xl border mb-2 ${geo ? 'bg-cyan-500/10 border-cyan-400' : 'bg-slate-950 border-slate-800'}`}
+                >
+                  {gettingGeo && <ActivityIndicator color="#22d3ee" size="small" style={{ marginRight: 8 }} />}
+                  <Text className={`text-[11px] font-bold ${geo ? 'text-cyan-300' : 'text-slate-400'}`}>
+                    {geo ? `📍 Точка сбора прикреплена ✕` : '📍 Прикрепить точку сбора (моя геопозиция)'}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Привязка сохранённого маршрута */}
+                {myRoutes.length > 0 && (
+                  <View className="mb-3">
+                    <Text className="text-slate-500 text-[10px] uppercase mb-1 font-bold">Маршрут (необязательно)</Text>
+                    <View className="flex-row flex-wrap gap-1.5">
+                      {myRoutes.map((r) => (
+                        <TouchableOpacity
+                          key={r.id}
+                          onPress={() => setRouteId((p) => (p === r.id ? null : r.id))}
+                          className={`px-3 py-2 rounded-xl border ${routeId === r.id ? 'bg-violet-500/20 border-violet-400' : 'bg-slate-950 border-slate-800'}`}
+                        >
+                          <Text className={`text-[11px] ${routeId === r.id ? 'text-violet-200' : 'text-slate-400'}`} numberOfLines={1}>
+                            🛣 {r.name}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                )}
+
                 <TouchableOpacity
                   onPress={submit}
                   disabled={busy}
@@ -266,6 +341,35 @@ export default function EventsScreen() {
                     </TouchableOpacity>
                   )}
                 </View>
+
+                {/* Точка сбора / маршрут — открыть на карте */}
+                {(ev.lat != null && ev.lng != null) || ev.route ? (
+                  <View className="flex-row gap-2 mt-2">
+                    {ev.lat != null && ev.lng != null && (
+                      <TouchableOpacity
+                        onPress={() =>
+                          router.push({
+                            pathname: '/(tabs)/map',
+                            params: { navLat: String(ev.lat), navLng: String(ev.lng), navName: ev.title },
+                          })
+                        }
+                        className="flex-1 flex-row items-center justify-center p-2.5 rounded-xl bg-sky-600"
+                      >
+                        <Text className="text-white text-[11px] font-bold">🧭 Маршрут к сбору</Text>
+                      </TouchableOpacity>
+                    )}
+                    {ev.route && (
+                      <TouchableOpacity
+                        onPress={() =>
+                          router.push({ pathname: '/(tabs)/map', params: { viewRouteId: String(ev.route!.id) } })
+                        }
+                        className="flex-1 flex-row items-center justify-center p-2.5 rounded-xl bg-violet-600"
+                      >
+                        <Text className="text-white text-[11px] font-bold" numberOfLines={1}>🛣 {ev.route.name}</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ) : null}
 
                 {/* Участники */}
                 <View className="flex-row items-center flex-wrap mt-2">

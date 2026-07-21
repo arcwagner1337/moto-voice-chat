@@ -1,4 +1,4 @@
-import { Stack, useFocusEffect } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState, Modal } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -176,6 +176,10 @@ export default function MapScreen() {
   const [pickingDest, setPickingDest] = useState(false);
   const [buildingRoad, setBuildingRoad] = useState(false);
   const pickingDestRef = useRef(false);
+  // Переход из вкладки EVENTS: построить маршрут к точке сбора / открыть маршрут
+  const navParams = useLocalSearchParams<{ navLat?: string; navLng?: string; navName?: string; viewRouteId?: string }>();
+  const handledParamRef = useRef('');
+  const [navParamTarget, setNavParamTarget] = useState<{ lat: number; lng: number; name: string } | null>(null);
   const [roadNav, setRoadNav] = useState<RoadNav | null>(null);
   const roadNavRef = useRef<RoadNav | null>(null);
   const roadCumRef = useRef<number[]>([]);
@@ -958,6 +962,32 @@ export default function MapScreen() {
     sock?.emit('nav:waypoint', { lat: nav.dest.lat, lng: nav.dest.lng, name: nav.dest.name });
     Alert.alert('Точка отправлена', 'Друзья получили точку и смогут построить к ней маршрут.');
   };
+
+  // Реакция на переход из EVENTS (точка сбора или привязанный маршрут)
+  useEffect(() => {
+    const key = `${navParams.navLat}|${navParams.navLng}|${navParams.viewRouteId}`;
+    if (key === handledParamRef.current) return;
+    if (navParams.navLat && navParams.navLng) {
+      handledParamRef.current = key;
+      setNavParamTarget({
+        lat: Number(navParams.navLat),
+        lng: Number(navParams.navLng),
+        name: String(navParams.navName || 'Точка сбора'),
+      });
+    } else if (navParams.viewRouteId) {
+      handledParamRef.current = key;
+      setMapMode('routes');
+      setViewingRouteId(Number(navParams.viewRouteId));
+    }
+  }, [navParams.navLat, navParams.navLng, navParams.viewRouteId, navParams.navName]);
+
+  // Точку сбора строим, как только появится своя позиция
+  useEffect(() => {
+    if (navParamTarget && myPos) {
+      buildRoad(navParamTarget);
+      setNavParamTarget(null);
+    }
+  }, [navParamTarget, myPos]);
 
   // ---------- SOS ----------
 

@@ -99,6 +99,10 @@ CREATE TABLE IF NOT EXISTS events (
   title      TEXT    NOT NULL,
   note       TEXT,
   place      TEXT,
+  lat        REAL,
+  lng        REAL,
+  route_id   INTEGER REFERENCES routes(id),
+  photo      TEXT,
   start_at   INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
@@ -129,6 +133,10 @@ const migrations = [
   'ALTER TABLE ride_members ADD COLUMN path TEXT',
   'ALTER TABLE messages ADD COLUMN reply_to INTEGER',
   'ALTER TABLE messages ADD COLUMN edited_at INTEGER',
+  'ALTER TABLE events ADD COLUMN lat REAL',
+  'ALTER TABLE events ADD COLUMN lng REAL',
+  'ALTER TABLE events ADD COLUMN route_id INTEGER',
+  'ALTER TABLE events ADD COLUMN photo TEXT',
 ];
 for (const m of migrations) {
   try {
@@ -283,11 +291,20 @@ export function eventInfo(eventId: number, viewerId?: number) {
        WHERE em.event_id = ? ORDER BY em.joined_at`
     )
     .all(eventId);
+  let route: { id: number; name: string } | null = null;
+  if (e.route_id) {
+    const r: any = db.prepare('SELECT id, name FROM routes WHERE id = ?').get(e.route_id);
+    if (r) route = { id: r.id, name: r.name };
+  }
   return {
     id: e.id,
     title: e.title,
     note: e.note || null,
     place: e.place || null,
+    lat: e.lat ?? null,
+    lng: e.lng ?? null,
+    route,
+    photo: e.photo || null,
     startAt: e.start_at,
     createdAt: e.created_at,
     creator: getUserById(e.creator_id),

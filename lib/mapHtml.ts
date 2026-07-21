@@ -42,9 +42,12 @@ export const MAP_HTML = `<!DOCTYPE html>
   var satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     maxZoom: 19, attribution: '&copy; Esri, Maxar, Earthstar Geographics'
   });
-  // Подписи (названия, дороги) поверх спутника для гибрида.
-  var satLabels = L.tileLayer('https://basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19, opacity: 0.9
+  // Гибрид: поверх снимка — прозрачные слои Esri с ДОРОГАМИ и подписями мест
+  var satRoads = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19
+  });
+  var satPlaces = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19
   });
   darkLayer.addTo(map);
 
@@ -53,14 +56,13 @@ export const MAP_HTML = `<!DOCTYPE html>
     dark: [darkLayer],
     light: [lightLayer],
     satellite: [satLayer],
-    hybrid: [satLayer, satLabels],
+    hybrid: [satLayer, satRoads, satPlaces],
   };
+  var ALL_LAYERS = [darkLayer, lightLayer, satLayer, satRoads, satPlaces];
   var baseKind = 'dark';
   function setBaseLayer(kind) {
     if (kind === baseKind || !LAYER_SETS[kind]) return;
-    [darkLayer, lightLayer, satLayer, satLabels].forEach(function (l) {
-      if (map.hasLayer(l)) map.removeLayer(l);
-    });
+    ALL_LAYERS.forEach(function (l) { if (map.hasLayer(l)) map.removeLayer(l); });
     LAYER_SETS[kind].forEach(function (l) { l.addTo(map); });
     baseKind = kind;
   }

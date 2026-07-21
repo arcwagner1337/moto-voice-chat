@@ -233,6 +233,10 @@ export type EventInfo = {
   title: string;
   note: string | null;
   place: string | null;
+  lat: number | null;
+  lng: number | null;
+  route: { id: number; name: string } | null;
+  photo: string | null;
   startAt: number;
   createdAt: number;
   creator: SocialUser;
@@ -242,10 +246,18 @@ export type EventInfo = {
   joined: boolean;
 };
 
-export const createEvent = (title: string, startAt: number, place?: string, note?: string) =>
+export type CreateEventOpts = {
+  place?: string;
+  note?: string;
+  lat?: number | null;
+  lng?: number | null;
+  routeId?: number | null;
+};
+
+export const createEvent = (title: string, startAt: number, opts: CreateEventOpts = {}) =>
   request<{ event: EventInfo }>('/events', {
     method: 'POST',
-    body: { title, startAt, place, note },
+    body: { title, startAt, ...opts },
   }).then((d) => d.event);
 
 export const getEvents = () =>

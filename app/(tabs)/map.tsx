@@ -1,6 +1,6 @@
 import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState, Modal, Image, Linking } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, AppState, Modal, Image, Linking, KeyboardAvoidingView, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -1955,7 +1955,10 @@ export default function MapScreen() {
 
       {/* Форма новой метки */}
       <Modal visible={!!pinDraft} transparent animationType="slide" onRequestClose={cancelPinDraft}>
-        <View className="flex-1 bg-black/60 justify-end">
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          className="flex-1 bg-black/60 justify-end"
+        >
           <View className="bg-slate-900 rounded-t-3xl border-t border-amber-500/40 p-4 pb-8">
             <View className="items-center mb-2"><View className="w-10 h-1 bg-slate-700 rounded-full" /></View>
             <Text className="text-amber-400 font-bold uppercase text-xs tracking-widest mb-3">📌 Новая метка</Text>
@@ -2003,7 +2006,7 @@ export default function MapScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Просмотр метки */}

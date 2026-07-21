@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   ImageBackground,
   Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import * as Location from 'expo-location';
 import { WebView } from 'react-native-webview';
@@ -240,9 +242,13 @@ export default function EventsScreen() {
   return (
     <View className="flex-1 bg-slate-950">
       <Stack.Screen options={{ headerShown: false }} />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        className="flex-1"
+      >
       <ScrollView
         className="flex-1"
-        contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16 }}
+        contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
@@ -482,6 +488,7 @@ export default function EventsScreen() {
           </>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Выбор точки сбора на карте */}
       <Modal visible={mapPickOpen} animationType="slide" onRequestClose={() => setMapPickOpen(false)}>

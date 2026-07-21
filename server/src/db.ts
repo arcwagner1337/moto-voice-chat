@@ -93,11 +93,29 @@ CREATE TABLE IF NOT EXISTS routes (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  creator_id INTEGER NOT NULL REFERENCES users(id),
+  title      TEXT    NOT NULL,
+  note       TEXT,
+  place      TEXT,
+  start_at   INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS event_members (
+  event_id  INTEGER NOT NULL REFERENCES events(id),
+  user_id   INTEGER NOT NULL REFERENCES users(id),
+  joined_at INTEGER NOT NULL,
+  PRIMARY KEY (event_id, user_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_friendships_to ON friendships(to_id, status);
 CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status);
 CREATE INDEX IF NOT EXISTS idx_routes_user ON routes(user_id);
 CREATE INDEX IF NOT EXISTS idx_routes_visibility ON routes(visibility);
+CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at);
 `);
 
 // Миграции для баз, созданных до появления новых колонок
@@ -252,6 +270,32 @@ export function friendIdsOf(userId: number): number[] {
 export function chatMemberIds(chatId: number): number[] {
   const rows: any[] = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
   return rows.map((r) => r.user_id as number);
+}
+
+// ---------- События (совместные поездки) ----------
+
+export function eventInfo(eventId: number, viewerId?: number) {
+  const e: any = db.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
+  if (!e) return null;
+  const members: any[] = db
+    .prepare(
+      `SELECT u.* FROM event_members em JOIN users u ON u.id = em.user_id
+       WHERE em.event_id = ? ORDER BY em.joined_at`
+    )
+    .all(eventId);
+  return {
+    id: e.id,
+    title: e.title,
+    note: e.note || null,
+    place: e.place || null,
+    startAt: e.start_at,
+    createdAt: e.created_at,
+    creator: getUserById(e.creator_id),
+    participants: members.map((m) => publicUser(m)),
+    count: members.length,
+    mine: viewerId != null && e.creator_id === viewerId,
+    joined: viewerId != null && members.some((m) => m.id === viewerId),
+  };
 }
 
 // ---------- Маршруты ----------

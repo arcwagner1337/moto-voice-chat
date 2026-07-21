@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Response } from 'express';
 import {
   db, publicUser, getUserById, areFriends, isChatMember, friendIdsOf, PublicUser,
-  canSeeRoute, routeInfo, haversineMeters,
+  canSeeRoute, routeInfo, haversineMeters, eventInfo,
 } from './db';
 import { hashPassword, checkPassword, signToken, requireAuth, AuthedRequest } from './auth';
 import { isOnline, notifyUser, getLiveLocation, storeLocation } from './realtime';
@@ -1037,4 +1037,79 @@ api.get('/music/search', requireAuth, async (req, res) => {
   } catch {
     res.status(502).json({ error: 'Поиск музыки недоступен' });
   }
+});
+
+// ---------- События (совместные поездки) ----------
+
+// Кого оповещать об изменениях события: создателя, участников и друзей создателя
+function eventAudience(eventId: number, creatorId: number): number[] {
+  const members: any[] = db.prepare('SELECT user_id FROM event_members WHERE event_id = ?').all(eventId);
+  const set = new Set<number>([creatorId, ...friendIdsOf(creatorId), ...members.map((m) => m.user_id)]);
+  return [...set];
+}
+
+api.post('/events', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const title = String(req.body?.title || '').trim();
+  const startAt = Number(req.body?.startAt);
+  if (!title) return res.status(400).json({ error: 'Введите название события' });
+  if (!isFinite(startAt) || startAt <= 0) return res.status(400).json({ error: 'Укажите время' });
+  const note = String(req.body?.note || '').trim().slice(0, 500) || null;
+  const place = String(req.body?.place || '').trim().slice(0, 120) || null;
+
+  const result = db
+    .prepare('INSERT INTO events (creator_id, title, note, place, start_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(userId, title.slice(0, 120), note, place, startAt, now());
+  const eventId = Number(result.lastInsertRowid);
+  db.prepare('INSERT INTO event_members (event_id, user_id, joined_at) VALUES (?, ?, ?)').run(eventId, userId, now());
+  for (const fid of friendIdsOf(userId)) notifyUser(fid, 'events:update', {});
+  res.json({ event: eventInfo(eventId, userId) });
+});
+
+api.get('/events', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  // Видны свои события и события друзей; только предстоящие (с запасом 3 часа)
+  const visible = [userId, ...friendIdsOf(userId)];
+  const placeholders = visible.map(() => '?').join(',');
+  const since = now() - 3 * 3600 * 1000;
+  const rows: any[] = db
+    .prepare(
+      `SELECT id FROM events WHERE creator_id IN (${placeholders}) AND start_at > ? ORDER BY start_at ASC LIMIT 50`
+    )
+    .all(...visible, since);
+  res.json({ events: rows.map((r) => eventInfo(r.id, userId)).filter(Boolean) });
+});
+
+api.post('/events/:id/join', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const eventId = Number(req.params.id);
+  const e: any = db.prepare('SELECT creator_id FROM events WHERE id = ?').get(eventId);
+  if (!e) return res.status(404).json({ error: 'Событие не найдено' });
+  db.prepare('INSERT OR IGNORE INTO event_members (event_id, user_id, joined_at) VALUES (?, ?, ?)').run(eventId, userId, now());
+  for (const uid of eventAudience(eventId, e.creator_id)) notifyUser(uid, 'events:update', {});
+  res.json({ event: eventInfo(eventId, userId) });
+});
+
+api.post('/events/:id/leave', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const eventId = Number(req.params.id);
+  const e: any = db.prepare('SELECT creator_id FROM events WHERE id = ?').get(eventId);
+  if (!e) return res.status(404).json({ error: 'Событие не найдено' });
+  if (e.creator_id === userId) return res.status(400).json({ error: 'Создатель не может выйти — удалите событие' });
+  db.prepare('DELETE FROM event_members WHERE event_id = ? AND user_id = ?').run(eventId, userId);
+  for (const uid of eventAudience(eventId, e.creator_id)) notifyUser(uid, 'events:update', {});
+  res.json({ event: eventInfo(eventId, userId) });
+});
+
+api.delete('/events/:id', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const eventId = Number(req.params.id);
+  const e: any = db.prepare('SELECT creator_id FROM events WHERE id = ?').get(eventId);
+  if (!e) return res.status(404).json({ error: 'Событие не найдено' });
+  if (e.creator_id !== userId) return res.status(403).json({ error: 'Удалить может только создатель' });
+  const audience = eventAudience(eventId, e.creator_id);
+  db.prepare('DELETE FROM event_members WHERE event_id = ?').run(eventId);
+  db.prepare('DELETE FROM events WHERE id = ?').run(eventId);
+  for (const uid of audience) notifyUser(uid, 'events:update', {});
+  res.json({ ok: true });
 });

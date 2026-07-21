@@ -226,6 +226,40 @@ export const getRoad = (
     `/route?from=${from.lat},${from.lng}&to=${to.lat},${to.lng}`
   );
 
+// ---------- События (совместные поездки) ----------
+
+export type EventInfo = {
+  id: number;
+  title: string;
+  note: string | null;
+  place: string | null;
+  startAt: number;
+  createdAt: number;
+  creator: SocialUser;
+  participants: SocialUser[];
+  count: number;
+  mine: boolean;
+  joined: boolean;
+};
+
+export const createEvent = (title: string, startAt: number, place?: string, note?: string) =>
+  request<{ event: EventInfo }>('/events', {
+    method: 'POST',
+    body: { title, startAt, place, note },
+  }).then((d) => d.event);
+
+export const getEvents = () =>
+  request<{ events: EventInfo[] }>('/events').then((d) => d.events);
+
+export const joinEvent = (id: number) =>
+  request<{ event: EventInfo }>(`/events/${id}/join`, { method: 'POST' }).then((d) => d.event);
+
+export const leaveEvent = (id: number) =>
+  request<{ event: EventInfo }>(`/events/${id}/leave`, { method: 'POST' }).then((d) => d.event);
+
+export const deleteEvent = (id: number) =>
+  request(`/events/${id}`, { method: 'DELETE' });
+
 // ---------- Музыка (Audius) ----------
 
 export type MusicTrack = {

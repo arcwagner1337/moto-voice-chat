@@ -104,6 +104,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="events"
+        options={{
+          title: 'EVENTS',
+          tabBarIcon: ({ color }) => <FontAwesome5 name="calendar-alt" size={18} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'PROFILE',

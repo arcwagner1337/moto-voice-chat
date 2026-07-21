@@ -1,5 +1,5 @@
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,13 @@ import {
   Alert,
   ActivityIndicator,
   ImageBackground,
+  Modal,
 } from 'react-native';
 import * as Location from 'expo-location';
+import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../../components/ScreenHeader';
+import { MAP_HTML } from '../../lib/mapHtml';
 import {
   EventInfo,
   RouteInfo,
@@ -105,6 +108,27 @@ export default function EventsScreen() {
     } finally {
       setGettingGeo(false);
     }
+  };
+
+  // Авто-формат времени: цифры сами разделяются двоеточием ЧЧ:ММ
+  const onTimeChange = (v: string) => {
+    const digits = v.replace(/\D/g, '').slice(0, 4);
+    setTime(digits.length <= 2 ? digits : `${digits.slice(0, 2)}:${digits.slice(2)}`);
+  };
+
+  // Выбор точки сбора на карте
+  const mapPickRef = useRef<WebView>(null);
+  const [mapPickOpen, setMapPickOpen] = useState(false);
+  const onPickMessage = (e: any) => {
+    try {
+      const msg = JSON.parse(e.nativeEvent.data);
+      if (msg.type === 'tap') {
+        setGeo({ lat: msg.lat, lng: msg.lng });
+        mapPickRef.current?.injectJavaScript(
+          `window.setRoute && window.setRoute([{lat:${msg.lat},lng:${msg.lng}}], '#22c55e', false); true;`
+        );
+      }
+    } catch {}
   };
 
   const refresh = useCallback(async () => {
@@ -257,10 +281,10 @@ export default function EventsScreen() {
                   <TextInput
                     placeholder="ЧЧ:ММ"
                     placeholderTextColor="#475569"
-                    keyboardType="numbers-and-punctuation"
+                    keyboardType="number-pad"
                     className="text-white bg-slate-950 p-3 rounded-xl border border-slate-800 w-24 text-center font-mono"
                     value={time}
-                    onChangeText={setTime}
+                    onChangeText={onTimeChange}
                     maxLength={5}
                   />
                   <TouchableOpacity
@@ -284,17 +308,32 @@ export default function EventsScreen() {
                   onChangeText={setPlace}
                 />
 
-                {/* Точка сбора на карте */}
-                <TouchableOpacity
-                  onPress={() => (geo ? setGeo(null) : attachMyLocation())}
-                  disabled={gettingGeo}
-                  className={`flex-row items-center justify-center p-3 rounded-xl border mb-2 ${geo ? 'bg-cyan-500/10 border-cyan-400' : 'bg-slate-950 border-slate-800'}`}
-                >
-                  {gettingGeo && <ActivityIndicator color="#22d3ee" size="small" style={{ marginRight: 8 }} />}
-                  <Text className={`text-[11px] font-bold ${geo ? 'text-cyan-300' : 'text-slate-400'}`}>
-                    {geo ? `📍 Точка сбора прикреплена ✕` : '📍 Прикрепить точку сбора (моя геопозиция)'}
-                  </Text>
-                </TouchableOpacity>
+                {/* Точка сбора: моя гео или точка на карте */}
+                {geo ? (
+                  <TouchableOpacity
+                    onPress={() => setGeo(null)}
+                    className="flex-row items-center justify-center p-3 rounded-xl border mb-2 bg-cyan-500/10 border-cyan-400"
+                  >
+                    <Text className="text-[11px] font-bold text-cyan-300">📍 Точка сбора прикреплена ✕</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View className="flex-row gap-2 mb-2">
+                    <TouchableOpacity
+                      onPress={attachMyLocation}
+                      disabled={gettingGeo}
+                      className="flex-1 flex-row items-center justify-center p-3 rounded-xl border bg-slate-950 border-slate-800"
+                    >
+                      {gettingGeo && <ActivityIndicator color="#22d3ee" size="small" style={{ marginRight: 6 }} />}
+                      <Text className="text-[11px] font-bold text-slate-400">📍 Моя гео</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => setMapPickOpen(true)}
+                      className="flex-1 flex-row items-center justify-center p-3 rounded-xl border bg-slate-950 border-slate-800"
+                    >
+                      <Text className="text-[11px] font-bold text-slate-400">🗺 На карте</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
 
                 {/* Привязка сохранённого маршрута */}
                 {myRoutes.length > 0 && (
@@ -443,6 +482,38 @@ export default function EventsScreen() {
           </>
         )}
       </ScrollView>
+
+      {/* Выбор точки сбора на карте */}
+      <Modal visible={mapPickOpen} animationType="slide" onRequestClose={() => setMapPickOpen(false)}>
+        <View className="flex-1 bg-slate-950" style={{ paddingTop: insets.top }}>
+          <View className="flex-row items-center justify-between px-4 py-3 border-b border-slate-800">
+            <Text className="text-white font-bold">Тапните точку сбора</Text>
+            <TouchableOpacity onPress={() => setMapPickOpen(false)} className="px-4 py-2 rounded-full bg-cyan-600">
+              <Text className="text-white text-[11px] font-bold uppercase">{geo ? 'Готово' : 'Закрыть'}</Text>
+            </TouchableOpacity>
+          </View>
+          <WebView
+            ref={mapPickRef}
+            source={{ html: MAP_HTML }}
+            originWhitelist={['*']}
+            javaScriptEnabled
+            domStorageEnabled
+            onMessage={onPickMessage}
+            onLoadEnd={() => {
+              mapPickRef.current?.injectJavaScript('window.setTapMode && window.setTapMode(true); true;');
+              if (geo) {
+                mapPickRef.current?.injectJavaScript(
+                  `window.setRoute && window.setRoute([{lat:${geo.lat},lng:${geo.lng}}], '#22c55e', true); true;`
+                );
+              }
+            }}
+            style={{ flex: 1, backgroundColor: '#020617' }}
+          />
+          <Text className="text-slate-500 text-[10px] text-center py-2">
+            {geo ? `📍 Выбрано: ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}` : 'Точка не выбрана'}
+          </Text>
+        </View>
+      </Modal>
     </View>
   );
 }

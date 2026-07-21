@@ -130,6 +130,9 @@ type MarkerData = {
   me?: boolean;
 };
 
+// Быстрый выбор значка метки (плюс можно ввести любой свой эмодзи)
+const PIN_EMOJIS = ['📌', '⛽', '🏍️', '🍔', '📷', '⚠️', '🏁', '🅿️', '🔧', '🏔️', '🌊', '❤️', '⭐', '☕'];
+
 export default function MapScreen() {
   useKeepAwake();
   const insets = useSafeAreaInsets();
@@ -218,10 +221,13 @@ export default function MapScreen() {
   const [kbHeight, setKbHeight] = useState(0);
   const [pinTitle, setPinTitle] = useState('');
   const [pinNote, setPinNote] = useState('');
+  const [pinEmoji, setPinEmoji] = useState('📌');
   const [pinMedia, setPinMedia] = useState<Attachment | null>(null);
   const [savingPin, setSavingPin] = useState(false);
   const [uploadingPinMedia, setUploadingPinMedia] = useState(false);
   const [viewingPin, setViewingPin] = useState<MapPin | null>(null);
+  // URL картинки для полноэкранного просмотра внутри приложения
+  const [fullImage, setFullImage] = useState<string | null>(null);
 
   // SOS: экстренное оповещение друзей. Пустой список получателей = всем друзьям.
   const [sosRecipients, setSosRecipients] = useState<number[]>([]);
@@ -640,7 +646,7 @@ export default function MapScreen() {
 
   // Отрисовка меток на карте
   useEffect(() => {
-    const list = pins.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng }));
+    const list = pins.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, emoji: p.emoji }));
     webRef.current?.injectJavaScript(`window.setPins && window.setPins(${JSON.stringify(list)}); true;`);
   }, [pins]);
 
@@ -661,10 +667,11 @@ export default function MapScreen() {
     if (!pinTitle.trim()) return Alert.alert('Ошибка', 'Введите название метки');
     setSavingPin(true);
     try {
-      await createPin(pinDraft.lat, pinDraft.lng, pinTitle.trim(), pinNote.trim() || undefined, pinMedia);
+      await createPin(pinDraft.lat, pinDraft.lng, pinTitle.trim(), pinNote.trim() || undefined, pinMedia, pinEmoji);
       setPinDraft(null);
       setPinTitle('');
       setPinNote('');
+      setPinEmoji('📌');
       setPinMedia(null);
       refreshPins();
     } catch (e) {
@@ -678,6 +685,7 @@ export default function MapScreen() {
     setPinDraft(null);
     setPinTitle('');
     setPinNote('');
+    setPinEmoji('📌');
     setPinMedia(null);
   };
 
@@ -2021,6 +2029,27 @@ export default function MapScreen() {
               value={pinNote}
               onChangeText={setPinNote}
             />
+            {/* Значок метки: свой эмодзи или быстрый выбор */}
+            <Text className="text-slate-400 text-[11px] font-bold uppercase tracking-wider mb-1">Значок</Text>
+            <View className="flex-row items-center mb-3">
+              <TextInput
+                value={pinEmoji}
+                onChangeText={(t) => setPinEmoji(t.slice(0, 8) || '📌')}
+                maxLength={8}
+                className="text-2xl text-center bg-slate-950 border border-amber-500/40 rounded-xl w-14 h-14 mr-2"
+              />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-1">
+                {PIN_EMOJIS.map((e) => (
+                  <TouchableOpacity
+                    key={e}
+                    onPress={() => setPinEmoji(e)}
+                    className={`w-11 h-11 rounded-xl items-center justify-center mr-1.5 border ${pinEmoji === e ? 'bg-amber-500/20 border-amber-400' : 'bg-slate-950 border-slate-800'}`}
+                  >
+                    <Text className="text-xl">{e}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
             <TouchableOpacity
               onPress={() => (pinMedia ? setPinMedia(null) : pickPinMedia())}
               disabled={uploadingPinMedia}
@@ -2060,22 +2089,27 @@ export default function MapScreen() {
           {viewingPin && (
             <View className="bg-slate-900 rounded-3xl border border-slate-700 overflow-hidden">
               {viewingPin.media && (
-                <TouchableOpacity
-                  onPress={() => Linking.openURL(mediaUrl(viewingPin.media!.url)).catch(() => {})}
-                  activeOpacity={0.9}
-                >
-                  {viewingPin.media.type.startsWith('image') ? (
+                viewingPin.media.type.startsWith('image') ? (
+                  <TouchableOpacity
+                    onPress={() => setFullImage(mediaUrl(viewingPin.media!.url))}
+                    activeOpacity={0.9}
+                  >
                     <Image source={{ uri: mediaUrl(viewingPin.media.url) }} className="w-full h-56" resizeMode="cover" />
-                  ) : (
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    onPress={() => Linking.openURL(mediaUrl(viewingPin.media!.url)).catch(() => {})}
+                    activeOpacity={0.9}
+                  >
                     <View className="w-full h-40 bg-slate-950 items-center justify-center">
                       <Text className="text-4xl">🎬</Text>
                       <Text className="text-cyan-300 text-xs underline mt-2">Открыть видео</Text>
                     </View>
-                  )}
-                </TouchableOpacity>
+                  </TouchableOpacity>
+                )
               )}
               <View className="p-4">
-                <Text className="text-white font-bold text-lg">📌 {viewingPin.title}</Text>
+                <Text className="text-white font-bold text-lg">{viewingPin.emoji || '📌'} {viewingPin.title}</Text>
                 {viewingPin.note && <Text className="text-slate-300 text-sm mt-1">{viewingPin.note}</Text>}
                 <Text className="text-slate-500 text-[10px] mt-2">
                   {viewingPin.owner.avatar} {viewingPin.owner.displayName}
@@ -2100,6 +2134,26 @@ export default function MapScreen() {
               </View>
             </View>
           )}
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Полноэкранный просмотр картинки внутри приложения */}
+      <Modal visible={!!fullImage} transparent animationType="fade" onRequestClose={() => setFullImage(null)}>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setFullImage(null)}
+          className="flex-1 bg-black items-center justify-center"
+        >
+          {fullImage && (
+            <Image source={{ uri: fullImage }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+          )}
+          <TouchableOpacity
+            onPress={() => setFullImage(null)}
+            style={{ position: 'absolute', top: insets.top + 12, right: 16 }}
+            className="w-10 h-10 rounded-full bg-black/60 border border-white/20 items-center justify-center"
+          >
+            <Text className="text-white text-lg">✕</Text>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
     </View>

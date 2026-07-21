@@ -304,6 +304,7 @@ export type MapPin = {
   lng: number;
   title: string;
   note: string | null;
+  emoji: string;
   media: Attachment | null;
   createdAt: number;
   owner: SocialUser;
@@ -314,11 +315,12 @@ export const createPin = (
   lng: number,
   title: string,
   note?: string,
-  media?: Attachment | null
+  media?: Attachment | null,
+  emoji?: string
 ) =>
   request<{ pin: MapPin }>('/pins', {
     method: 'POST',
-    body: { lat, lng, title, note, mediaUrl: media?.url, mediaType: media?.type },
+    body: { lat, lng, title, note, emoji, mediaUrl: media?.url, mediaType: media?.type },
   }).then((d) => d.pin);
 
 export const getPins = () => request<{ pins: MapPin[] }>('/pins').then((d) => d.pins);

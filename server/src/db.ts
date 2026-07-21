@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS map_pins (
   lng        REAL    NOT NULL,
   title      TEXT    NOT NULL,
   note       TEXT,
+  emoji      TEXT,
   media_url  TEXT,
   media_type TEXT,
   created_at INTEGER NOT NULL
@@ -153,6 +154,7 @@ const migrations = [
   'ALTER TABLE events ADD COLUMN photo TEXT',
   'ALTER TABLE messages ADD COLUMN attachment_url TEXT',
   'ALTER TABLE messages ADD COLUMN attachment_type TEXT',
+  'ALTER TABLE map_pins ADD COLUMN emoji TEXT',
 ];
 for (const m of migrations) {
   try {

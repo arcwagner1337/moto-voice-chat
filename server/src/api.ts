@@ -1159,6 +1159,7 @@ function pinInfo(p: any) {
     lng: p.lng,
     title: p.title,
     note: p.note || null,
+    emoji: p.emoji || '📌',
     media: p.media_url ? { url: p.media_url, type: p.media_type || '' } : null,
     createdAt: p.created_at,
     owner: getUserById(p.user_id),
@@ -1173,12 +1174,15 @@ api.post('/pins', requireAuth, (req, res) => {
   if (!isFinite(lat) || !isFinite(lng)) return res.status(400).json({ error: 'Нет координат' });
   if (!title) return res.status(400).json({ error: 'Введите название метки' });
   const note = String(req.body?.note || '').trim().slice(0, 500) || null;
+  // Значок метки: эмодзи. Вырезаем HTML-опасные символы — на карте он
+  // подставляется в innerHTML маркера (Leaflet divIcon), защита от XSS.
+  const emoji = String(req.body?.emoji || '📌').replace(/[<>&"'`]/g, '').trim().slice(0, 12) || '📌';
   const mediaUrl = String(req.body?.mediaUrl || '').trim() || null;
   const mediaType = String(req.body?.mediaType || '').trim().slice(0, 60) || null;
 
   const result = db
-    .prepare('INSERT INTO map_pins (user_id, lat, lng, title, note, media_url, media_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(userId, lat, lng, title.slice(0, 120), note, mediaUrl, mediaType, now());
+    .prepare('INSERT INTO map_pins (user_id, lat, lng, title, note, emoji, media_url, media_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(userId, lat, lng, title.slice(0, 120), note, emoji, mediaUrl, mediaType, now());
   for (const fid of friendIdsOf(userId)) notifyUser(fid, 'pins:update', {});
   res.json({ pin: pinInfo(db.prepare('SELECT * FROM map_pins WHERE id = ?').get(Number(result.lastInsertRowid))) });
 });

@@ -174,7 +174,7 @@ export const MAP_HTML = `<!DOCTYPE html>
     var g = L.layerGroup();
     list.forEach(function (p) {
       var m = L.marker([p.lat, p.lng], { icon: L.divIcon({
-        html: '<div style="font-size:24px;filter:drop-shadow(0 1px 2px #000)">📌</div>',
+        html: '<div style="font-size:24px;filter:drop-shadow(0 1px 2px #000)">' + (p.emoji || '📌') + '</div>',
         className: '', iconSize: [24, 24], iconAnchor: [12, 22] }) });
       m.on('click', function () {
         if (window.ReactNativeWebView) {

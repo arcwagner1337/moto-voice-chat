@@ -33,6 +33,11 @@ import ScreenHeader from '../../components/ScreenHeader';
 const RECENT_ROOMS_KEY = "@recent_rooms_list";
 const USER_NAME_KEY = "@user_custom_name";
 
+// Короткое имя для показа: приватные звонки из чата — это `call-<chatId>-<uuid>`,
+// такое имя ломает вёрстку. Показываем дружелюбную подпись, при этом реальный
+// roomID (для сигналинга/join-room) не трогаем.
+const roomLabel = (r: string) => (r && r.startsWith('call-') ? 'Приватный звонок' : r);
+
 const configuration = {
 	iceServers: [
 		{ urls: 'stun:stun.l.google.com:19302' }
@@ -386,7 +391,7 @@ export default function InternetChatRoom() {
 		await notifee.displayNotification({
 			id: 'mesh-intercom-fgs',
 			title: '📻 Рация MESH_VOICE active',
-			body: muted ? `Микрофон выключен · канал: ${target}` : `Вы находитесь в канале: ${target}`,
+			body: muted ? `Микрофон выключен · канал: ${roomLabel(target)}` : `Вы находитесь в канале: ${roomLabel(target)}`,
 			android: {
 				channelId,
 				asForegroundService: true,
@@ -749,7 +754,7 @@ export default function InternetChatRoom() {
 										{recentRooms.map((id) => (
 											<View key={id} className="flex-row items-center mb-2">
 												<TouchableOpacity onPress={() => joinRoom(id)} className="flex-1 bg-slate-900 p-4 rounded-2xl border border-slate-800 flex-row justify-between items-center">
-													<Text className="text-white font-bold text-base"># {id}</Text>
+													<Text className="text-white font-bold text-base flex-1 mr-2" numberOfLines={1} ellipsizeMode="tail"># {roomLabel(id)}</Text>
 													<Text className="text-cyan-500 text-[10px] font-bold">ВОЙТИ →</Text>
 												</TouchableOpacity>
 												<TouchableOpacity onPress={() => removeRoom(id)} className="ml-2 bg-red-900/20 p-4 rounded-2xl border border-red-500/20">
@@ -763,8 +768,8 @@ export default function InternetChatRoom() {
 						) : (
 							<View className="flex-1 mt-6">
 								<View className="flex-row justify-between items-center mb-4 px-1">
-									<View>
-										<Text className="text-green-500 text-2xl font-black"># {roomID}</Text>
+									<View className="flex-1 mr-3">
+										<Text className="text-green-500 text-2xl font-black" numberOfLines={1} ellipsizeMode="tail"># {roomLabel(roomID)}</Text>
 										<Text className="text-[10px] uppercase font-bold text-cyan-400">Online Active</Text>
 									</View>
 									<TouchableOpacity onPress={stopAll} className="bg-red-500/10 px-6 py-2 rounded-full border border-red-500/30">
@@ -867,7 +872,10 @@ export default function InternetChatRoom() {
 
 			{/* Поиск музыки (Audius) */}
 			<Modal visible={musicOpen} transparent animationType="slide" onRequestClose={() => setMusicOpen(false)}>
-				<View className="flex-1 bg-black/60 justify-end">
+				<KeyboardAvoidingView
+					behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+					className="flex-1 bg-black/60 justify-end"
+				>
 					<View className="bg-slate-900 rounded-t-3xl border-t border-violet-500/40 p-4 pb-8" style={{ maxHeight: '80%' }}>
 						<View className="items-center mb-2"><View className="w-10 h-1 bg-slate-700 rounded-full" /></View>
 						<View className="flex-row justify-between items-center mb-3">
@@ -908,7 +916,7 @@ export default function InternetChatRoom() {
 							/>
 						)}
 					</View>
-				</View>
+				</KeyboardAvoidingView>
 			</Modal>
 
 			<View className="absolute opacity-0 pointer-events-none">

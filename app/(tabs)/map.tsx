@@ -1499,10 +1499,12 @@ export default function MapScreen() {
           )}
 
           {!fullMap && (
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1">
           <ScrollView
             className="flex-1 mt-3"
             contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
           >
             {mapMode === 'rides' ? (
             <>
@@ -1927,6 +1929,7 @@ export default function MapScreen() {
             </>
             )}
           </ScrollView>
+          </KeyboardAvoidingView>
           )}
         </>
       )}

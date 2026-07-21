@@ -6,6 +6,8 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
   Alert,
   ActivityIndicator,
 } from 'react-native';
@@ -126,6 +128,10 @@ export default function ChatsScreen() {
   return (
     <View className="flex-1 bg-slate-950">
       <Stack.Screen options={{ headerShown: false }} />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        className="flex-1"
+      >
       <ScrollView
         className="flex-1"
         contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16 }}
@@ -275,6 +281,7 @@ export default function ChatsScreen() {
           </>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }

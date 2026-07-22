@@ -97,11 +97,11 @@ export default function ChatScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
 
-  const attachMedia = async () => {
+  const runPick = async (legacy: boolean) => {
     setUploading(true);
     setUploadPct(null);
     try {
-      const arr = await pickAndUploadMany(true, 10, (f) => setUploadPct(f));
+      const arr = await pickAndUploadMany(true, 10, (f) => setUploadPct(f), legacy);
       if (arr.length) {
         setAttachments((prev) => [...prev, ...arr].slice(0, 10));
         setEditing(null); // к правке файлы не цепляем
@@ -112,6 +112,15 @@ export default function ChatScreen() {
       setUploading(false);
       setUploadPct(null);
     }
+  };
+
+  // Даём выбор источника: фото-пикер (галерея-грид) или системный выбор файлов
+  const attachMedia = () => {
+    Alert.alert('Прикрепить', 'Откуда взять фото или видео?', [
+      { text: '🖼 Галерея / фото', onPress: () => runPick(false) },
+      { text: '🗂 Файлы', onPress: () => runPick(true) },
+      { text: 'Отмена', style: 'cancel' },
+    ]);
   };
 
   // Тап по кнопке записи: переключение аудио ↔ видео (при первом включении

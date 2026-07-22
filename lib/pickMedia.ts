@@ -34,7 +34,8 @@ export async function pickAndUpload(
 export async function pickAndUploadMany(
   allowVideo = true,
   limit = 10,
-  onProgress?: (frac: number) => void
+  onProgress?: (frac: number) => void,
+  legacy = false
 ): Promise<Attachment[]> {
   const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!perm.granted) throw new Error('Нет доступа к галерее');
@@ -43,7 +44,7 @@ export async function pickAndUploadMany(
     allowsMultipleSelection: true,
     selectionLimit: limit,
     quality: 0.4,
-    legacy: true, // классическая галерея на Android вместо системного фото-пикера Google
+    legacy, // true → системный выбор файлов (ACTION_GET_CONTENT), false → фото-пикер
   });
   if (res.canceled || !res.assets?.length) return [];
   const out: Attachment[] = [];

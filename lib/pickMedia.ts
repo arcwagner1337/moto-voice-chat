@@ -20,6 +20,7 @@ export async function pickAndUpload(
   const res = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: allowVideo ? ['images', 'videos'] : ['images'],
     quality: 0.4, // сильнее жмём — через dev-tunnel аплоад узкий
+    legacy: true, // классическая галерея на Android вместо системного фото-пикера Google
   });
   if (res.canceled || !res.assets?.length) return null;
   const a = res.assets[0];
@@ -42,6 +43,7 @@ export async function pickAndUploadMany(
     allowsMultipleSelection: true,
     selectionLimit: limit,
     quality: 0.4,
+    legacy: true, // классическая галерея на Android вместо системного фото-пикера Google
   });
   if (res.canceled || !res.assets?.length) return [];
   const out: Attachment[] = [];

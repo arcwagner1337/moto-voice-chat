@@ -7,6 +7,7 @@ import { WebView } from 'react-native-webview';
 import { useKeepAwake } from 'expo-keep-awake';
 import ScreenHeader from '../../components/ScreenHeader';
 import VideoPlayerModal from '../../components/VideoPlayerModal';
+import VideoThumb from '../../components/VideoThumb';
 import {
   SocialUser,
   RideInfo,
@@ -2102,15 +2103,11 @@ export default function MapScreen() {
                     <Image source={{ uri: mediaUrl(viewingPin.media.url) }} className="w-full h-56" resizeMode="cover" />
                   </TouchableOpacity>
                 ) : (
-                  <TouchableOpacity
+                  <VideoThumb
+                    url={mediaUrl(viewingPin.media.url)}
                     onPress={() => setFullVideo(mediaUrl(viewingPin.media!.url))}
-                    activeOpacity={0.9}
-                  >
-                    <View className="w-full h-40 bg-slate-950 items-center justify-center">
-                      <Text className="text-4xl">▶️</Text>
-                      <Text className="text-cyan-300 text-xs mt-2">Смотреть видео</Text>
-                    </View>
-                  </TouchableOpacity>
+                    className="w-full h-56 bg-slate-950 overflow-hidden"
+                  />
                 )
               )}
               <View className="p-4">

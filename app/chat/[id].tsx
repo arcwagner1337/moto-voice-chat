@@ -42,6 +42,7 @@ import { pickAndUploadMany } from '../../lib/pickMedia';
 import { getSocialSocket } from '../../lib/socialSocket';
 import { setOpenChat, cancelChatNotification } from '../../lib/notifications';
 import VideoPlayerModal from '../../components/VideoPlayerModal';
+import VideoThumb from '../../components/VideoThumb';
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -1103,14 +1104,12 @@ function MessageBubble({
                           <Image source={{ uri: mediaUrl(a.url) }} className={`${dim} rounded-xl`} resizeMode="cover" />
                         </TouchableOpacity>
                       ) : a.type.startsWith('video') ? (
-                        <TouchableOpacity
+                        <VideoThumb
                           key={i}
+                          url={mediaUrl(a.url)}
                           onPress={() => onOpenVideo(mediaUrl(a.url))}
-                          className={`${dim} rounded-xl bg-black items-center justify-center`}
-                        >
-                          <Text className="text-3xl">▶️</Text>
-                          <Text className="text-white/70 text-[9px] mt-1">Видео</Text>
-                        </TouchableOpacity>
+                          className={`${dim} rounded-xl bg-black overflow-hidden`}
+                        />
                       ) : (
                         <TouchableOpacity
                           key={i}

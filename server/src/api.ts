@@ -1122,10 +1122,12 @@ api.post('/events', requireAuth, (req, res) => {
     if (!r || r.user_id !== userId) routeId = null;
   }
   const photo = String(req.body?.photo || '').trim() || null;
+  // Видимость: 'all' — видно всем, 'friends' — только создателю и его друзьям
+  const visibility = req.body?.visibility === 'all' ? 'all' : 'friends';
 
   const result = db
-    .prepare('INSERT INTO events (creator_id, title, note, place, lat, lng, route_id, photo, start_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(userId, title.slice(0, 120), note, place, lat, lng, routeId, photo, startAt, now());
+    .prepare('INSERT INTO events (creator_id, title, note, place, lat, lng, route_id, photo, visibility, start_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(userId, title.slice(0, 120), note, place, lat, lng, routeId, photo, visibility, startAt, now());
   const eventId = Number(result.lastInsertRowid);
   db.prepare('INSERT INTO event_members (event_id, user_id, joined_at) VALUES (?, ?, ?)').run(eventId, userId, now());
   for (const fid of friendIdsOf(userId)) notifyUser(fid, 'events:update', {});
@@ -1134,15 +1136,36 @@ api.post('/events', requireAuth, (req, res) => {
 
 api.get('/events', requireAuth, (req, res) => {
   const userId = (req as AuthedRequest).userId;
-  // Видны свои события и события друзей; только предстоящие (с запасом 3 часа)
+  // Активные (предстоящие, с запасом 3 часа). Видно: свои и друзей (любой
+  // видимости) + публичные события кого угодно (visibility = 'all').
   const visible = [userId, ...friendIdsOf(userId)];
   const placeholders = visible.map(() => '?').join(',');
   const since = now() - 3 * 3600 * 1000;
   const rows: any[] = db
     .prepare(
-      `SELECT id FROM events WHERE creator_id IN (${placeholders}) AND start_at > ? ORDER BY start_at ASC LIMIT 50`
+      `SELECT id FROM events
+       WHERE start_at > ? AND (creator_id IN (${placeholders}) OR visibility = 'all')
+       ORDER BY start_at ASC LIMIT 100`
     )
-    .all(...visible, since);
+    .all(since, ...visible);
+  res.json({ events: rows.map((r) => eventInfo(r.id, userId)).filter(Boolean) });
+});
+
+// Архив: завершённые по времени события. Показываем те, что связаны со мной —
+// созданные мной/друзьями или те, к которым я присоединялся.
+api.get('/events/archive', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const visible = [userId, ...friendIdsOf(userId)];
+  const placeholders = visible.map(() => '?').join(',');
+  const cutoff = now() - 3 * 3600 * 1000;
+  const rows: any[] = db
+    .prepare(
+      `SELECT DISTINCT e.id, e.start_at FROM events e
+       LEFT JOIN event_members em ON em.event_id = e.id AND em.user_id = ?
+       WHERE e.start_at <= ? AND (e.creator_id IN (${placeholders}) OR em.user_id IS NOT NULL)
+       ORDER BY e.start_at DESC LIMIT 50`
+    )
+    .all(userId, cutoff, ...visible);
   res.json({ events: rows.map((r) => eventInfo(r.id, userId)).filter(Boolean) });
 });
 

@@ -25,6 +25,7 @@ import {
   Attachment,
   getSavedUser,
   getEvents,
+  getEventsArchive,
   createEvent,
   joinEvent,
   leaveEvent,
@@ -57,6 +58,8 @@ export default function EventsScreen() {
   const [user, setUser] = useState<SocialUser | null>(null);
   const [checked, setChecked] = useState(false);
   const [events, setEvents] = useState<EventInfo[]>([]);
+  const [archive, setArchive] = useState<EventInfo[]>([]);
+  const [tab, setTab] = useState<'active' | 'archive'>('active');
   const [loading, setLoading] = useState(false);
 
   // Форма создания
@@ -69,6 +72,7 @@ export default function EventsScreen() {
   const [gettingGeo, setGettingGeo] = useState(false);
   const [myRoutes, setMyRoutes] = useState<RouteInfo[]>([]);
   const [routeId, setRouteId] = useState<number | null>(null);
+  const [visibility, setVisibility] = useState<'all' | 'friends'>('friends');
   const [photo, setPhoto] = useState<Attachment | null>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -153,7 +157,9 @@ export default function EventsScreen() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setEvents(await getEvents());
+      const [act, arc] = await Promise.all([getEvents(), getEventsArchive()]);
+      setEvents(act);
+      setArchive(arc);
     } catch {
       const saved = await getSavedUser();
       if (!saved) setUser(null);
@@ -197,6 +203,7 @@ export default function EventsScreen() {
         lng: geo?.lng ?? null,
         routeId,
         photo: photo?.url ?? null,
+        visibility,
       });
       setCreating(false);
       setTitle('');
@@ -206,6 +213,7 @@ export default function EventsScreen() {
       setGeo(null);
       setRouteId(null);
       setPhoto(null);
+      setVisibility('friends');
       refresh();
     } catch (e) {
       Alert.alert('Ошибка', (e as Error).message);
@@ -256,6 +264,8 @@ export default function EventsScreen() {
     return `${day} в ${hm}${rel ? ` · ${rel}` : ''}`;
   };
 
+  const list = tab === 'active' ? events : archive;
+
   return (
     <View className="flex-1 bg-slate-950">
       <Stack.Screen options={{ headerShown: false }} />
@@ -271,7 +281,7 @@ export default function EventsScreen() {
       >
         <View className="flex-row items-end justify-between mb-6">
           <ScreenHeader title="EVENTS" subtitle="ride_together" noMargin />
-          {user && (
+          {user && tab === 'active' && (
             <TouchableOpacity
               onPress={() => (creating ? setCreating(false) : openCreate())}
               className={`px-4 py-2 rounded-full border ${creating ? 'bg-slate-800 border-slate-700' : 'bg-cyan-600 border-cyan-500'}`}
@@ -290,6 +300,26 @@ export default function EventsScreen() {
           </View>
         ) : (
           <>
+            {/* Переключатель Активные / Архив */}
+            <View className="flex-row bg-slate-900 rounded-2xl p-1 mb-4 border border-slate-800">
+              <TouchableOpacity
+                onPress={() => setTab('active')}
+                className={`flex-1 py-2 rounded-xl items-center ${tab === 'active' ? 'bg-cyan-600' : ''}`}
+              >
+                <Text className={`text-[11px] font-bold uppercase ${tab === 'active' ? 'text-white' : 'text-slate-400'}`}>
+                  Активные
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => { setTab('archive'); setCreating(false); }}
+                className={`flex-1 py-2 rounded-xl items-center ${tab === 'archive' ? 'bg-cyan-600' : ''}`}
+              >
+                <Text className={`text-[11px] font-bold uppercase ${tab === 'archive' ? 'text-white' : 'text-slate-400'}`}>
+                  Архив{archive.length ? ` · ${archive.length}` : ''}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             {creating && (
               <View className="p-4 bg-slate-900 rounded-3xl border border-cyan-500/40 mb-4">
                 <Text className="text-cyan-400 font-bold uppercase mb-3 text-[10px] tracking-widest">Новая поездка</Text>
@@ -390,6 +420,23 @@ export default function EventsScreen() {
                   </Text>
                 </TouchableOpacity>
 
+                {/* Видимость события */}
+                <Text className="text-slate-500 text-[10px] uppercase mb-1 font-bold">Кто видит</Text>
+                <View className="flex-row gap-2 mb-3">
+                  <TouchableOpacity
+                    onPress={() => setVisibility('friends')}
+                    className={`flex-1 p-3 rounded-xl border items-center ${visibility === 'friends' ? 'bg-cyan-500/20 border-cyan-400' : 'bg-slate-950 border-slate-800'}`}
+                  >
+                    <Text className={`text-[11px] font-bold ${visibility === 'friends' ? 'text-cyan-300' : 'text-slate-400'}`}>👥 Друзья</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setVisibility('all')}
+                    className={`flex-1 p-3 rounded-xl border items-center ${visibility === 'all' ? 'bg-cyan-500/20 border-cyan-400' : 'bg-slate-950 border-slate-800'}`}
+                  >
+                    <Text className={`text-[11px] font-bold ${visibility === 'all' ? 'text-cyan-300' : 'text-slate-400'}`}>🌍 Все</Text>
+                  </TouchableOpacity>
+                </View>
+
                 <TouchableOpacity
                   onPress={submit}
                   disabled={busy}
@@ -401,22 +448,24 @@ export default function EventsScreen() {
               </View>
             )}
 
-            {loading && events.length === 0 && (
+            {loading && list.length === 0 && (
               <View className="items-center py-10">
                 <ActivityIndicator color="#22d3ee" />
                 <Text className="text-slate-500 text-[10px] mt-3 uppercase">Загрузка событий…</Text>
               </View>
             )}
 
-            {!loading && events.length === 0 && !creating && (
+            {!loading && list.length === 0 && !creating && (
               <View className="p-6 bg-slate-900/50 rounded-3xl border border-slate-800">
                 <Text className="text-slate-500 text-xs">
-                  Пока нет предстоящих поездок. Создайте свою — друзья увидят и смогут присоединиться.
+                  {tab === 'archive'
+                    ? 'Архив пуст. Сюда попадают события, время которых уже прошло.'
+                    : 'Пока нет предстоящих поездок. Создайте свою — её увидят по выбранной видимости и смогут присоединиться.'}
                 </Text>
               </View>
             )}
 
-            {events.map((ev) => {
+            {list.map((ev) => {
               const content = (
                 <>
                 <View className="flex-row items-start justify-between">
@@ -429,6 +478,18 @@ export default function EventsScreen() {
                     <Text className="text-slate-500 text-[10px] mt-1">
                       Организатор: {ev.creator.avatar} {ev.creator.displayName}
                     </Text>
+                    <View className="flex-row items-center mt-1.5 gap-1.5">
+                      <View className={`px-2 py-0.5 rounded-full ${ev.visibility === 'all' ? 'bg-emerald-500/15' : 'bg-slate-700/40'}`}>
+                        <Text className={`text-[9px] font-bold ${ev.visibility === 'all' ? 'text-emerald-300' : 'text-slate-400'}`}>
+                          {ev.visibility === 'all' ? '🌍 Для всех' : '👥 Для друзей'}
+                        </Text>
+                      </View>
+                      {ev.finished && (
+                        <View className="px-2 py-0.5 rounded-full bg-slate-700/40">
+                          <Text className="text-[9px] font-bold text-slate-400">🏁 Завершено</Text>
+                        </View>
+                      )}
+                    </View>
                   </View>
                   {ev.mine && (
                     <TouchableOpacity onPress={() => remove(ev)} className="px-3 py-2 rounded-xl bg-slate-950 border border-red-500/30">
@@ -475,7 +536,7 @@ export default function EventsScreen() {
                   {ev.count > 8 && <Text className="text-slate-500 text-[10px]">+{ev.count - 8}</Text>}
                 </View>
 
-                {!ev.mine && (
+                {!ev.mine && !ev.finished && (
                   <TouchableOpacity
                     onPress={() => toggleJoin(ev)}
                     className={`mt-3 p-3 rounded-2xl items-center ${ev.joined ? 'bg-slate-800 border border-slate-700' : 'bg-cyan-600'}`}
@@ -484,6 +545,9 @@ export default function EventsScreen() {
                       {ev.joined ? '✓ Еду — выйти' : '+ Присоединиться'}
                     </Text>
                   </TouchableOpacity>
+                )}
+                {ev.finished && ev.joined && !ev.mine && (
+                  <Text className="text-slate-500 text-[10px] mt-3">✓ Вы участвовали в этой поездке</Text>
                 )}
                 </>
               );

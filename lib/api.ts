@@ -281,7 +281,9 @@ export type EventInfo = {
   lng: number | null;
   route: { id: number; name: string } | null;
   photo: string | null;
+  visibility: 'all' | 'friends';
   startAt: number;
+  finished: boolean;
   createdAt: number;
   creator: SocialUser;
   participants: SocialUser[];
@@ -297,6 +299,7 @@ export type CreateEventOpts = {
   lng?: number | null;
   routeId?: number | null;
   photo?: string | null;
+  visibility?: 'all' | 'friends';
 };
 
 // ---------- Метки на карте (с фото/видео) ----------
@@ -338,6 +341,9 @@ export const createEvent = (title: string, startAt: number, opts: CreateEventOpt
 
 export const getEvents = () =>
   request<{ events: EventInfo[] }>('/events').then((d) => d.events);
+
+export const getEventsArchive = () =>
+  request<{ events: EventInfo[] }>('/events/archive').then((d) => d.events);
 
 export const joinEvent = (id: number) =>
   request<{ event: EventInfo }>(`/events/${id}/join`, { method: 'POST' }).then((d) => d.event);

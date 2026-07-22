@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS events (
   lng        REAL,
   route_id   INTEGER REFERENCES routes(id),
   photo      TEXT,
+  visibility TEXT    NOT NULL DEFAULT 'friends',
   start_at   INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
@@ -156,6 +157,7 @@ const migrations = [
   'ALTER TABLE messages ADD COLUMN attachment_type TEXT',
   'ALTER TABLE messages ADD COLUMN attachments TEXT',
   'ALTER TABLE map_pins ADD COLUMN emoji TEXT',
+  "ALTER TABLE events ADD COLUMN visibility TEXT NOT NULL DEFAULT 'friends'",
 ];
 for (const m of migrations) {
   try {
@@ -324,7 +326,9 @@ export function eventInfo(eventId: number, viewerId?: number) {
     lng: e.lng ?? null,
     route,
     photo: e.photo || null,
+    visibility: (e.visibility || 'friends') as 'all' | 'friends',
     startAt: e.start_at,
+    finished: e.start_at <= Date.now(),
     createdAt: e.created_at,
     creator: getUserById(e.creator_id),
     participants: members.map((m) => publicUser(m)),

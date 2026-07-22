@@ -1038,7 +1038,7 @@ function VideoNote({ url }: { url: string }) {
 
   return (
     <TouchableOpacity activeOpacity={0.85} onPress={toggle} className="mb-1">
-      <View className="w-52 h-52 rounded-full overflow-hidden bg-black border-2 border-cyan-500/40">
+      <View className="w-52 h-52 rounded-full overflow-hidden bg-black">
         <Video
           ref={videoRef}
           source={{ uri: url }}
@@ -1104,6 +1104,19 @@ function MessageBubble({
     })
   ).current;
 
+  // Сообщение только из фото/видео/кружков (без текста и ответа) — рисуем
+  // без «пузыря» и рамки, как в Telegram: медиа плавает само по себе.
+  const attList = message.attachments?.length
+    ? message.attachments
+    : message.attachment
+    ? [message.attachment]
+    : [];
+  const mediaOnly =
+    attList.length > 0 &&
+    !message.text &&
+    !message.replyTo &&
+    attList.every((a) => a.type.startsWith('image') || a.type.startsWith('video'));
+
   return (
     <View className="mb-3" {...pan.panHandlers}>
       {/* индикатор ответа при свайпе */}
@@ -1125,7 +1138,11 @@ function MessageBubble({
         <TouchableOpacity
           activeOpacity={0.7}
           onPress={onOpenMenu}
-          className={`p-3 rounded-2xl ${mine ? 'bg-cyan-700 rounded-tr-none' : 'bg-slate-800 rounded-tl-none'}`}
+          className={
+            mediaOnly
+              ? ''
+              : `p-3 rounded-2xl ${mine ? 'bg-cyan-700 rounded-tr-none' : 'bg-slate-800 rounded-tl-none'}`
+          }
         >
           {message.replyTo && (
             <View className="border-l-2 border-cyan-300/70 pl-2 mb-1.5 opacity-90">

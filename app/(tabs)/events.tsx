@@ -564,8 +564,8 @@ export default function EventsScreen() {
                   <Text className="text-slate-500 text-[10px] mt-3">✓ Вы участвовали в этой поездке</Text>
                 )}
 
-                {/* Групповой чат события — участникам: поделиться фото/видео/впечатлениями */}
-                {(ev.mine || ev.joined) && (
+                {/* Групповой чат события: участникам, а для публичных («для всех») — любому */}
+                {(ev.mine || ev.joined || ev.visibility === 'all') && (
                   <TouchableOpacity
                     onPress={() => enterChat(ev)}
                     disabled={openingChat === ev.id}

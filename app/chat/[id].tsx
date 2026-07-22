@@ -96,6 +96,10 @@ export default function ChatScreen() {
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
+  // Slide-to-cancel голосового: сдвиг пальца влево при удержании → отмена
+  const recStartXRef = useRef(0);
+  const recCancelRef = useRef(false);
+  const [recWillCancel, setRecWillCancel] = useState(false);
 
   const runPick = async (legacy: boolean) => {
     setUploading(true);
@@ -156,9 +160,30 @@ export default function ChatScreen() {
     setVideoRec('preview');
   };
 
-  // Отпустили кнопку: важно только для голоса; кружок живёт своими кнопками
+  // Отпустили кнопку: голос — отправить или отменить (если увели палец влево);
+  // кружок живёт своими кнопками на оверлее
   const endHoldRec = () => {
-    if (recMode === 'audio' && recordingRef.current) stopRecordingAndSend();
+    if (recMode === 'audio' && recordingRef.current) {
+      if (recCancelRef.current) cancelRecording();
+      else stopRecordingAndSend();
+    }
+    recCancelRef.current = false;
+    setRecWillCancel(false);
+  };
+
+  // Движение пальца во время записи голоса: влево > 70px — пометить на отмену
+  const onRecTouchStart = (x: number) => {
+    recStartXRef.current = x;
+    recCancelRef.current = false;
+    setRecWillCancel(false);
+  };
+  const onRecTouchMove = (x: number) => {
+    if (!isRecording) return;
+    const willCancel = x - recStartXRef.current < -70;
+    if (willCancel !== recCancelRef.current) {
+      recCancelRef.current = willCancel;
+      setRecWillCancel(willCancel);
+    }
   };
 
   // Старт записи кружка (красная кнопка на оверлее)
@@ -722,13 +747,15 @@ export default function ChatScreen() {
                 </>
               ) : (
                 <>
-                  <View className="w-3 h-3 rounded-full bg-red-500 mr-3" />
-                  <Text className="text-white font-mono flex-1" numberOfLines={1}>
+                  <View className={`w-3 h-3 rounded-full mr-3 ${recWillCancel ? 'bg-slate-500' : 'bg-red-500'}`} />
+                  <Text className={`font-mono flex-1 ${recWillCancel ? 'text-red-400' : 'text-white'}`} numberOfLines={1}>
                     {videoRec
                       ? videoRec === 'recording'
                         ? `Кружок: запись ${fmtRec(recSecs)}`
                         : 'Кружок: камера открыта'
-                      : `Запись… ${fmtRec(recSecs)} · отпустите для отправки`}
+                      : recWillCancel
+                        ? '✕ Отпустите для отмены'
+                        : `Запись… ${fmtRec(recSecs)} · ◀ увести для отмены`}
                   </Text>
                 </>
               )}
@@ -769,16 +796,21 @@ export default function ChatScreen() {
               <Text className="text-white text-xl">{editing ? '✓' : '🚀'}</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity
-              onPress={toggleRecMode}
-              onLongPress={startHoldRec}
-              onPressOut={endHoldRec}
-              delayLongPress={200}
-              disabled={uploading || videoRec === 'uploading'}
-              className={`h-14 w-14 rounded-2xl items-center justify-center border ${isRecording || videoRec ? 'bg-red-600 border-red-400' : 'bg-slate-800 border-slate-700'}`}
+            <View
+              onTouchStart={(e) => onRecTouchStart(e.nativeEvent.pageX)}
+              onTouchMove={(e) => onRecTouchMove(e.nativeEvent.pageX)}
             >
-              <Ionicons name={recMode === 'video' ? 'videocam' : 'mic'} size={24} color="#fff" />
-            </TouchableOpacity>
+              <TouchableOpacity
+                onPress={toggleRecMode}
+                onLongPress={startHoldRec}
+                onPressOut={endHoldRec}
+                delayLongPress={200}
+                disabled={uploading || videoRec === 'uploading'}
+                className={`h-14 w-14 rounded-2xl items-center justify-center border ${recWillCancel ? 'bg-slate-700 border-slate-500' : isRecording || videoRec ? 'bg-red-600 border-red-400' : 'bg-slate-800 border-slate-700'}`}
+              >
+                <Ionicons name={recWillCancel ? 'trash' : recMode === 'video' ? 'videocam' : 'mic'} size={24} color="#fff" />
+              </TouchableOpacity>
+            </View>
           )}
         </View>
       </KeyboardAvoidingView>

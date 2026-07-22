@@ -1256,7 +1256,9 @@ api.post('/events/:id/chat', requireAuth, (req, res) => {
   const isParticipant =
     e.creator_id === userId ||
     !!db.prepare('SELECT 1 FROM event_members WHERE event_id = ? AND user_id = ?').get(eventId, userId);
-  if (!isParticipant) return res.status(403).json({ error: 'Сначала присоединитесь к событию' });
+  const isPublic = (e.visibility || 'friends') === 'all';
+  // В чат пускаем участников; для публичных событий («для всех») — любого.
+  if (!isParticipant && !isPublic) return res.status(403).json({ error: 'Сначала присоединитесь к событию' });
 
   let chatId: number = e.chat_id;
   // чат мог быть удалён — пересоздаём при необходимости

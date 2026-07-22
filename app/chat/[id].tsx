@@ -64,15 +64,18 @@ export default function ChatScreen() {
   const [uploading, setUploading] = useState(false);
   // Прогресс загрузки 0..1 (большие видео/кружки)
   const [uploadPct, setUploadPct] = useState<number | null>(null);
-  // Кнопка записи как в Telegram: тап переключает режим, зажатие пишет
+  // Кнопка записи как в Telegram: тап переключает режим, зажатие пишет (голос)
+  // или открывает рекордер кружка (видео) — держать палец при кружке НЕ нужно.
   const [recMode, setRecMode] = useState<'audio' | 'video'>('audio');
-  // null → нет записи; preparing → камера стартует; recording → пишем; uploading → шлём
-  const [videoRec, setVideoRec] = useState<null | 'preparing' | 'recording' | 'uploading'>(null);
+  // null → нет; preview → камера открыта, ждём старта; recording → пишем; uploading → шлём
+  const [videoRec, setVideoRec] = useState<null | 'preview' | 'recording' | 'uploading'>(null);
   const videoRecRef = useRef<typeof videoRec>(null);
   useEffect(() => { videoRecRef.current = videoRec; }, [videoRec]);
   const camRef = useRef<CameraView>(null);
-  const heldRef = useRef(false); // палец всё ещё на кнопке?
   const vidStartRef = useRef(0);
+  const vidCancelRef = useRef(false); // «Отмена» во время записи — не отправлять
+  const [camReady, setCamReady] = useState(false);
+  const [camFacing, setCamFacing] = useState<'front' | 'back'>('front');
   const [camPerm, requestCamPerm] = useCameraPermissions();
   const [micPerm, requestMicPerm] = useMicrophonePermissions();
   // Полноэкранный просмотр внутри приложения
@@ -105,6 +108,7 @@ export default function ChatScreen() {
   // Тап по кнопке записи: переключение аудио ↔ видео (при первом включении
   // видео сразу спрашиваем разрешения, чтобы зажатие потом стартовало мгновенно)
   const toggleRecMode = async () => {
+    if (videoRec) return; // рекордер кружка открыт — режим не трогаем
     if (recMode === 'audio') {
       setRecMode('video');
       if (!camPerm?.granted) await requestCamPerm();
@@ -114,43 +118,46 @@ export default function ChatScreen() {
     }
   };
 
-  // Зажатие: старт записи (голос или кружок — по текущему режиму)
+  // Зажатие: голос — пишем, пока держат; видео — открываем рекордер кружка
+  // (дальше палец держать не нужно, управление кнопками на оверлее).
   const startHoldRec = async () => {
-    heldRef.current = true;
+    if (videoRec) return;
     if (recMode === 'audio') {
       startRecording();
       return;
     }
-    // Видео-кружок в приложении: маунтим камеру, запись начнётся в onCameraReady
     if (!camPerm?.granted || !micPerm?.granted) {
       const c = camPerm?.granted ? camPerm : await requestCamPerm();
       const m = micPerm?.granted ? micPerm : await requestMicPerm();
       if (!c?.granted || !m?.granted) {
         return Alert.alert('Нет доступа', 'Разрешите камеру и микрофон для видео-кружков.');
       }
-      return; // разрешения только что выдали — пусть зажмёт ещё раз
     }
-    setVideoRec('preparing');
+    vidCancelRef.current = false;
+    setCamReady(false);
+    setVideoRec('preview');
   };
 
-  // Камера готова: если палец ещё на кнопке — стартуем запись кружка
-  const onCamReady = () => {
-    if (!heldRef.current || videoRecRef.current !== 'preparing') {
-      setVideoRec(null);
-      return;
-    }
+  // Отпустили кнопку: важно только для голоса; кружок живёт своими кнопками
+  const endHoldRec = () => {
+    if (recMode === 'audio' && recordingRef.current) stopRecordingAndSend();
+  };
+
+  // Старт записи кружка (красная кнопка на оверлее)
+  const startCircleRec = () => {
+    if (videoRecRef.current !== 'preview' || !camRef.current) return;
     setVideoRec('recording');
     vidStartRef.current = Date.now();
     setRecSecs(0);
     recTimerRef.current = setInterval(() => setRecSecs((s) => s + 1), 1000);
     camRef.current
-      ?.recordAsync({ maxDuration: 60 })
+      .recordAsync({ maxDuration: 60 })
       .then(async (res) => {
         clearRecTimer();
         setRecSecs(0);
         const dur = Date.now() - vidStartRef.current;
-        if (!res?.uri || dur < 800) {
-          setVideoRec(null); // слишком коротко — не отправляем
+        if (vidCancelRef.current || !res?.uri || dur < 800) {
+          setVideoRec(null); // отменили или слишком коротко — не отправляем
           return;
         }
         try {
@@ -175,18 +182,25 @@ export default function ChatScreen() {
       });
   };
 
-  // Отпустили кнопку: остановить и отправить (или отменить, если не успело стартовать)
-  const endHoldRec = () => {
-    heldRef.current = false;
-    if (recMode === 'audio') {
-      if (recordingRef.current) stopRecordingAndSend();
-      return;
-    }
+  // Стоп и отправить (по кнопке или по maxDuration=60с — recordAsync зарезолвится)
+  const stopCircleRec = () => {
+    if (videoRecRef.current === 'recording') camRef.current?.stopRecording();
+  };
+
+  // Отмена кружка: из превью — просто закрыть; из записи — остановить без отправки
+  const cancelCircleRec = () => {
     if (videoRecRef.current === 'recording') {
-      camRef.current?.stopRecording(); // recordAsync выше зарезолвится с uri
-    } else if (videoRecRef.current === 'preparing') {
+      vidCancelRef.current = true;
+      camRef.current?.stopRecording();
+    } else {
       setVideoRec(null);
     }
+  };
+
+  // Переворот камеры (до старта записи: смена facing во время записи обрывает её)
+  const flipCamera = () => {
+    setCamReady(false);
+    setCamFacing((f) => (f === 'front' ? 'back' : 'front'));
   };
 
   const fmtRec = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -692,7 +706,11 @@ export default function ChatScreen() {
                 <>
                   <View className="w-3 h-3 rounded-full bg-red-500 mr-3" />
                   <Text className="text-white font-mono flex-1" numberOfLines={1}>
-                    {videoRec === 'preparing' ? 'Камера…' : `Запись… ${fmtRec(recSecs)}`} · отпустите для отправки
+                    {videoRec
+                      ? videoRec === 'recording'
+                        ? `Кружок: запись ${fmtRec(recSecs)}`
+                        : 'Кружок: камера открыта'
+                      : `Запись… ${fmtRec(recSecs)} · отпустите для отправки`}
                   </Text>
                 </>
               )}
@@ -747,27 +765,67 @@ export default function ChatScreen() {
         </View>
       </KeyboardAvoidingView>
 
-      {/* Оверлей записи кружка: круглая фронталка по центру. pointerEvents=none —
-          тач продолжает жить на зажатой кнопке записи. */}
-      {(videoRec === 'preparing' || videoRec === 'recording') && (
+      {/* Рекордер кружка: круглое превью + кнопки. Палец держать не нужно —
+          старт/стоп/отмена по кнопкам, камера переключается до старта записи. */}
+      {(videoRec === 'preview' || videoRec === 'recording') && (
         <View
-          pointerEvents="none"
-          className="absolute inset-0 items-center justify-center bg-black/70"
+          className="absolute inset-0 items-center justify-center bg-black/85"
           style={{ zIndex: 50, elevation: 50 }}
         >
-          <View className="w-72 h-72 rounded-full overflow-hidden border-2 border-red-500 bg-black">
+          <View className={`w-72 h-72 rounded-full overflow-hidden border-2 bg-black ${videoRec === 'recording' ? 'border-red-500' : 'border-slate-500'}`}>
             <CameraView
               ref={camRef}
               style={{ width: '100%', height: '100%' }}
-              facing="front"
+              facing={camFacing}
               mode="video"
               videoQuality="480p"
-              onCameraReady={onCamReady}
+              onCameraReady={() => setCamReady(true)}
             />
           </View>
           <Text className="text-white font-mono mt-4">
-            {videoRec === 'recording' ? `● ${fmtRec(recSecs)} / 1:00` : 'Камера запускается…'}
+            {videoRec === 'recording'
+              ? `● ${fmtRec(recSecs)} / 1:00`
+              : camReady
+              ? 'Кружок: жми запись'
+              : 'Камера запускается…'}
           </Text>
+          <View className="flex-row items-center mt-5" style={{ gap: 28 }}>
+            {/* Отмена */}
+            <TouchableOpacity
+              onPress={cancelCircleRec}
+              className="w-14 h-14 rounded-full bg-slate-800 border border-slate-600 items-center justify-center"
+            >
+              <Ionicons name="close" size={26} color="#fff" />
+            </TouchableOpacity>
+            {/* Старт / Стоп+отправить */}
+            {videoRec === 'preview' ? (
+              <TouchableOpacity
+                onPress={startCircleRec}
+                disabled={!camReady}
+                className={`w-20 h-20 rounded-full items-center justify-center border-4 border-white/30 ${camReady ? 'bg-red-600' : 'bg-slate-700'}`}
+              >
+                <View className="w-7 h-7 rounded-full bg-white" />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={stopCircleRec}
+                className="w-20 h-20 rounded-full bg-cyan-600 items-center justify-center border-4 border-white/30"
+              >
+                <Ionicons name="arrow-up" size={32} color="#fff" />
+              </TouchableOpacity>
+            )}
+            {/* Переворот камеры (только до старта записи) */}
+            {videoRec === 'preview' ? (
+              <TouchableOpacity
+                onPress={flipCamera}
+                className="w-14 h-14 rounded-full bg-slate-800 border border-slate-600 items-center justify-center"
+              >
+                <Ionicons name="camera-reverse" size={24} color="#fff" />
+              </TouchableOpacity>
+            ) : (
+              <View className="w-14 h-14" />
+            )}
+          </View>
         </View>
       )}
 

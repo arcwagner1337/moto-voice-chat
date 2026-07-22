@@ -72,6 +72,14 @@ export default function InternetChatRoom() {
 
 	// Синхронный музыкальный плеер комнаты (Audius)
 	const [musicOpen, setMusicOpen] = useState(false);
+	// Высота клавиатуры для ручного подъёма листа музыки над ней (behavior=height
+	// в прозрачной Modal на Android ненадёжен, особенно при пустом списке).
+	const [musicKb, setMusicKb] = useState(0);
+	useEffect(() => {
+		const show = Keyboard.addListener('keyboardDidShow', (e) => setMusicKb(e.endCoordinates?.height ?? 0));
+		const hide = Keyboard.addListener('keyboardDidHide', () => setMusicKb(0));
+		return () => { show.remove(); hide.remove(); };
+	}, []);
 	const [musicQuery, setMusicQuery] = useState('');
 	const [musicResults, setMusicResults] = useState<MusicTrack[]>([]);
 	const [musicSearching, setMusicSearching] = useState(false);
@@ -871,12 +879,15 @@ export default function InternetChatRoom() {
 			</KeyboardAvoidingView>
 
 			{/* Поиск музыки (Audius) */}
-			<Modal visible={musicOpen} transparent animationType="slide" onRequestClose={() => setMusicOpen(false)}>
+			<Modal visible={musicOpen} transparent statusBarTranslucent animationType="slide" onRequestClose={() => setMusicOpen(false)}>
 				<KeyboardAvoidingView
-					behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+					behavior={Platform.OS === 'ios' ? 'padding' : undefined}
 					className="flex-1 bg-black/60 justify-end"
 				>
-					<View className="bg-slate-900 rounded-t-3xl border-t border-violet-500/40 p-4 pb-8" style={{ maxHeight: '80%' }}>
+					<View
+						className="bg-slate-900 rounded-t-3xl border-t border-violet-500/40 p-4 pb-8"
+						style={{ maxHeight: '80%', marginBottom: Platform.OS === 'android' ? musicKb : 0 }}
+					>
 						<View className="items-center mb-2"><View className="w-10 h-1 bg-slate-700 rounded-full" /></View>
 						<View className="flex-row justify-between items-center mb-3">
 							<Text className="text-violet-400 font-bold uppercase text-xs tracking-widest">🎵 Музыка · Audius</Text>

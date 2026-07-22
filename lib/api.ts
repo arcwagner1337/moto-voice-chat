@@ -392,8 +392,27 @@ export type MusicTrack = {
   streamUrl: string;
 };
 
+export type MusicPlaylist = {
+  id: string;
+  name: string;
+  artist: string;
+  artwork: string | null;
+  trackCount: number;
+};
+
 export const searchMusic = (q: string) =>
   request<{ tracks: MusicTrack[] }>(`/music/search?q=${encodeURIComponent(q)}`).then((d) => d.tracks);
+
+export const trendingMusic = (genre?: string) =>
+  request<{ tracks: MusicTrack[] }>(
+    `/music/trending${genre ? `?genre=${encodeURIComponent(genre)}` : ''}`
+  ).then((d) => d.tracks);
+
+export const musicPlaylists = () =>
+  request<{ playlists: MusicPlaylist[] }>('/music/playlists').then((d) => d.playlists);
+
+export const playlistTracks = (id: string) =>
+  request<{ tracks: MusicTrack[] }>(`/music/playlist/${encodeURIComponent(id)}`).then((d) => d.tracks);
 
 // ---------- SOS ----------
 

@@ -1081,6 +1081,20 @@ async function audiusHost(): Promise<string> {
 }
 
 // Поиск треков: возвращаем готовый stream URL для проигрывания в expo-av
+function mapAudiusTracks(host: string, data: any[]): any[] {
+  return (data || [])
+    .filter((t: any) => t && !t.is_delete && t.is_streamable !== false)
+    .slice(0, 30)
+    .map((t: any) => ({
+      id: t.id,
+      title: t.title,
+      artist: t.user?.name || '',
+      duration: t.duration || 0,
+      artwork: t.artwork?.['150x150'] || null,
+      streamUrl: `${host}/v1/tracks/${t.id}/stream?app_name=meshvoice`,
+    }));
+}
+
 api.get('/music/search', requireAuth, async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.json({ tracks: [] });
@@ -1089,20 +1103,58 @@ api.get('/music/search', requireAuth, async (req, res) => {
     const url = `${host}/v1/tracks/search?query=${encodeURIComponent(q)}&app_name=meshvoice`;
     const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
     const j: any = await r.json();
-    const tracks = (j?.data || [])
-      .filter((t: any) => t && !t.is_delete && t.is_streamable !== false)
-      .slice(0, 25)
-      .map((t: any) => ({
-        id: t.id,
-        title: t.title,
-        artist: t.user?.name || '',
-        duration: t.duration || 0,
-        artwork: t.artwork?.['150x150'] || null,
-        streamUrl: `${host}/v1/tracks/${t.id}/stream?app_name=meshvoice`,
-      }));
-    res.json({ tracks });
+    res.json({ tracks: mapAudiusTracks(host, j?.data) });
   } catch {
     res.status(502).json({ error: 'Поиск музыки недоступен' });
+  }
+});
+
+// Популярное сейчас (опционально по жанру — «подборки по предпочтениям»)
+api.get('/music/trending', requireAuth, async (req, res) => {
+  const genre = String(req.query.genre || '').trim();
+  try {
+    const host = await audiusHost();
+    let url = `${host}/v1/tracks/trending?app_name=meshvoice`;
+    if (genre) url += `&genre=${encodeURIComponent(genre)}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    const j: any = await r.json();
+    res.json({ tracks: mapAudiusTracks(host, j?.data) });
+  } catch {
+    res.status(502).json({ error: 'Музыка недоступна' });
+  }
+});
+
+// Популярные плейлисты
+api.get('/music/playlists', requireAuth, async (_req, res) => {
+  try {
+    const host = await audiusHost();
+    const r = await fetch(`${host}/v1/playlists/trending?app_name=meshvoice`, { signal: AbortSignal.timeout(10000) });
+    const j: any = await r.json();
+    const playlists = (j?.data || [])
+      .filter((p: any) => p && !p.is_delete)
+      .slice(0, 15)
+      .map((p: any) => ({
+        id: p.id,
+        name: p.playlist_name || 'Плейлист',
+        artist: p.user?.name || '',
+        artwork: p.artwork?.['150x150'] || null,
+        trackCount: p.track_count || 0,
+      }));
+    res.json({ playlists });
+  } catch {
+    res.status(502).json({ error: 'Плейлисты недоступны' });
+  }
+});
+
+// Треки конкретного плейлиста
+api.get('/music/playlist/:id', requireAuth, async (req, res) => {
+  try {
+    const host = await audiusHost();
+    const r = await fetch(`${host}/v1/playlists/${String(req.params.id)}/tracks?app_name=meshvoice`, { signal: AbortSignal.timeout(10000) });
+    const j: any = await r.json();
+    res.json({ tracks: mapAudiusTracks(host, j?.data) });
+  } catch {
+    res.status(502).json({ error: 'Плейлист недоступен' });
   }
 });
 

@@ -10,6 +10,7 @@ import {
 	PermissionsAndroid,
 	TextInput,
 	ScrollView,
+	Image,
 	Keyboard,
 	TouchableWithoutFeedback,
 	KeyboardAvoidingView,
@@ -22,7 +23,7 @@ import io from 'socket.io-client';
 import { Audio } from 'expo-av';
 import { Modal } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { searchMusic, MusicTrack } from '../../lib/api';
+import { searchMusic, trendingMusic, musicPlaylists, playlistTracks, MusicTrack, MusicPlaylist } from '../../lib/api';
 import notifee, { AndroidImportance, AndroidCategory, AndroidColor, AndroidForegroundServiceType, EventType } from '@notifee/react-native';
 import { loadProfile } from '../../lib/profile';
 import { BACKEND_URL } from '../../lib/config';
@@ -37,6 +38,20 @@ const USER_NAME_KEY = "@user_custom_name";
 // такое имя ломает вёрстку. Показываем дружелюбную подпись, при этом реальный
 // roomID (для сигналинга/join-room) не трогаем.
 const roomLabel = (r: string) => (r && r.startsWith('call-') ? 'Приватный звонок' : r);
+
+// Жанры Audius для быстрых подборок («популярное» = без жанра)
+const MUSIC_GENRES: { key: string; label: string }[] = [
+	{ key: '', label: '🔥 Популярное' },
+	{ key: 'Electronic', label: 'Электроника' },
+	{ key: 'Hip-Hop/Rap', label: 'Хип-хоп' },
+	{ key: 'Rock', label: 'Рок' },
+	{ key: 'Pop', label: 'Поп' },
+	{ key: 'R&B/Soul', label: 'R&B' },
+	{ key: 'Jazz', label: 'Джаз' },
+	{ key: 'Ambient', label: 'Эмбиент' },
+	{ key: 'Lo-Fi', label: 'Lo-Fi' },
+	{ key: 'Latin', label: 'Латина' },
+];
 
 const configuration = {
 	iceServers: [
@@ -83,6 +98,10 @@ export default function InternetChatRoom() {
 	const [musicQuery, setMusicQuery] = useState('');
 	const [musicResults, setMusicResults] = useState<MusicTrack[]>([]);
 	const [musicSearching, setMusicSearching] = useState(false);
+	const [musicGenre, setMusicGenre] = useState<string>('');
+	const [playlists, setPlaylists] = useState<MusicPlaylist[]>([]);
+	// Очередь для кнопки «следующий трек» (список, из которого поставили текущий)
+	const queueRef = useRef<MusicTrack[]>([]);
 	const [nowPlaying, setNowPlaying] = useState<MusicTrack | null>(null);
 	const [musicPlaying, setMusicPlaying] = useState(false);
 	const soundRef = useRef<Audio.Sound | null>(null);
@@ -560,11 +579,57 @@ export default function InternetChatRoom() {
 		try { setMusicResults(await searchMusic(q)); } catch { } finally { setMusicSearching(false); }
 	};
 
-	// Диджей ставит трек всем в комнате
-	const djPlay = async (track: MusicTrack) => {
+	// Популярное / жанровая подборка
+	const loadTrending = async (g: string) => {
+		setMusicGenre(g);
+		setMusicQuery('');
+		setMusicSearching(true);
+		try { setMusicResults(await trendingMusic(g || undefined)); } catch { } finally { setMusicSearching(false); }
+	};
+
+	// Открыть плейлист — его треки в список
+	const openPlaylist = async (p: MusicPlaylist) => {
+		setMusicGenre('__pl');
+		setMusicQuery('');
+		setMusicSearching(true);
+		try { setMusicResults(await playlistTracks(p.id)); } catch { } finally { setMusicSearching(false); }
+	};
+
+	// Подтягиваем популярное и плейлисты при первом открытии окна музыки
+	useEffect(() => {
+		if (!musicOpen) return;
+		if (musicResults.length === 0) loadTrending('');
+		if (playlists.length === 0) musicPlaylists().then(setPlaylists).catch(() => { });
+	}, [musicOpen]);
+
+	// Диджей ставит трек всем в комнате (list — очередь для «следующего»)
+	const djPlay = async (track: MusicTrack, list?: MusicTrack[]) => {
+		queueRef.current = (list && list.length ? list : musicResults);
 		setMusicOpen(false);
 		await loadAndPlay(track, 0, true);
 		socket.current?.emit('music:set', roomIDRef.current, track);
+	};
+
+	// Следующий трек: из очереди, а если кончилась/нет — из популярного
+	const djNext = async () => {
+		const cur = nowPlaying;
+		let list = queueRef.current;
+		let next: MusicTrack | undefined;
+		if (list.length && cur) {
+			const idx = list.findIndex((t) => t.id === cur.id);
+			next = list[idx + 1];
+		}
+		if (!next) {
+			try {
+				list = await trendingMusic();
+				queueRef.current = list;
+				next = list.find((t) => t.id !== cur?.id) || list[0];
+			} catch { }
+		}
+		if (next) {
+			await loadAndPlay(next, 0, true);
+			socket.current?.emit('music:set', roomIDRef.current, next);
+		}
 	};
 
 	// Пауза/продолжить — с рассылкой позиции
@@ -823,6 +888,9 @@ export default function InternetChatRoom() {
 										<TouchableOpacity onPress={djToggle} className="w-9 h-9 rounded-xl bg-violet-600 items-center justify-center mr-1.5">
 											<Text className="text-white text-sm">{musicPlaying ? '⏸' : '▶'}</Text>
 										</TouchableOpacity>
+										<TouchableOpacity onPress={djNext} className="w-9 h-9 rounded-xl bg-violet-600 items-center justify-center mr-1.5">
+											<Text className="text-white text-sm">⏭</Text>
+										</TouchableOpacity>
 										<TouchableOpacity onPress={() => setMusicOpen(true)} className="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 items-center justify-center mr-1.5">
 											<Text className="text-sm">🔍</Text>
 										</TouchableOpacity>
@@ -907,17 +975,56 @@ export default function InternetChatRoom() {
 								<Text className="text-white font-bold text-xs">Найти</Text>
 							</TouchableOpacity>
 						</View>
+						{/* Жанровые подборки */}
+						<ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-2" contentContainerStyle={{ gap: 6 }}>
+							{MUSIC_GENRES.map((g) => (
+								<TouchableOpacity
+									key={g.key || 'top'}
+									onPress={() => loadTrending(g.key)}
+									className={`px-3 py-2 rounded-full border ${musicGenre === g.key && !musicQuery ? 'bg-violet-600 border-violet-400' : 'bg-slate-950 border-slate-800'}`}
+								>
+									<Text className={`text-[11px] font-bold ${musicGenre === g.key && !musicQuery ? 'text-white' : 'text-slate-400'}`}>{g.label}</Text>
+								</TouchableOpacity>
+							))}
+						</ScrollView>
+
+						{/* Популярные плейлисты */}
+						{playlists.length > 0 && (
+							<View className="mb-2">
+								<Text className="text-slate-500 text-[10px] uppercase font-bold mb-1.5 tracking-widest">Плейлисты</Text>
+								<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+									{playlists.map((p) => (
+										<TouchableOpacity key={p.id} onPress={() => openPlaylist(p)} className="w-28">
+											<View className="w-28 h-28 rounded-2xl overflow-hidden bg-slate-800 border border-slate-700 items-center justify-center">
+												{p.artwork ? (
+													<Image source={{ uri: p.artwork }} style={{ width: '100%', height: '100%' }} />
+												) : (
+													<Text className="text-3xl">🎧</Text>
+												)}
+											</View>
+											<Text className="text-white text-[11px] font-bold mt-1" numberOfLines={1}>{p.name}</Text>
+											<Text className="text-slate-500 text-[9px]" numberOfLines={1}>{p.trackCount} трек.</Text>
+										</TouchableOpacity>
+									))}
+								</ScrollView>
+							</View>
+						)}
+
 						{musicSearching ? (
-							<Text className="text-slate-500 text-xs text-center py-6">Ищу…</Text>
+							<Text className="text-slate-500 text-xs text-center py-6">Загружаю…</Text>
 						) : (
 							<FlatList
 								data={musicResults}
-								keyExtractor={(t) => t.id}
+								keyExtractor={(t, i) => `${t.id}-${i}`}
 								keyboardShouldPersistTaps="handled"
-								ListEmptyComponent={<Text className="text-slate-600 text-xs text-center py-6">Введите запрос и нажмите «Найти».</Text>}
+								ListEmptyComponent={<Text className="text-slate-600 text-xs text-center py-6">Ничего не нашлось. Попробуйте другой запрос или подборку.</Text>}
 								renderItem={({ item }) => (
-									<TouchableOpacity onPress={() => djPlay(item)} className="flex-row items-center p-3 bg-slate-950 rounded-2xl border border-slate-800 mb-1.5">
-										<Text className="text-lg mr-3">▶</Text>
+									<TouchableOpacity onPress={() => djPlay(item, musicResults)} className="flex-row items-center p-3 bg-slate-950 rounded-2xl border border-slate-800 mb-1.5">
+										{item.artwork ? (
+											<Image source={{ uri: item.artwork }} className="w-10 h-10 rounded-lg mr-3" />
+										) : (
+											<Text className="text-lg mr-3">▶</Text>
+										)}
 										<View className="flex-1">
 											<Text className="text-white font-bold text-sm" numberOfLines={1}>{item.title}</Text>
 											<Text className="text-slate-500 text-[10px]" numberOfLines={1}>{item.artist}</Text>

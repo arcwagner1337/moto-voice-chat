@@ -36,8 +36,9 @@ import {
   uploadFile,
 } from '../../lib/api';
 import { Audio, Video, ResizeMode } from 'expo-av';
+import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
-import { pickAndUploadMany, recordVideoNote } from '../../lib/pickMedia';
+import { pickAndUploadMany } from '../../lib/pickMedia';
 import { getSocialSocket } from '../../lib/socialSocket';
 import { setOpenChat, cancelChatNotification } from '../../lib/notifications';
 import VideoPlayerModal from '../../components/VideoPlayerModal';
@@ -60,9 +61,19 @@ export default function ChatScreen() {
   const [menuMsg, setMenuMsg] = useState<ChatMessage | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
-  // Прогресс загрузки 0..1 (большие видео) и занятость записи кружка
+  // Прогресс загрузки 0..1 (большие видео/кружки)
   const [uploadPct, setUploadPct] = useState<number | null>(null);
-  const [noteBusy, setNoteBusy] = useState(false);
+  // Кнопка записи как в Telegram: тап переключает режим, зажатие пишет
+  const [recMode, setRecMode] = useState<'audio' | 'video'>('audio');
+  // null → нет записи; preparing → камера стартует; recording → пишем; uploading → шлём
+  const [videoRec, setVideoRec] = useState<null | 'preparing' | 'recording' | 'uploading'>(null);
+  const videoRecRef = useRef<typeof videoRec>(null);
+  useEffect(() => { videoRecRef.current = videoRec; }, [videoRec]);
+  const camRef = useRef<CameraView>(null);
+  const heldRef = useRef(false); // палец всё ещё на кнопке?
+  const vidStartRef = useRef(0);
+  const [camPerm, requestCamPerm] = useCameraPermissions();
+  const [micPerm, requestMicPerm] = useMicrophonePermissions();
   // Полноэкранный просмотр внутри приложения
   const [fullImage, setFullImage] = useState<string | null>(null);
   const [fullVideo, setFullVideo] = useState<string | null>(null);
@@ -90,22 +101,90 @@ export default function ChatScreen() {
     }
   };
 
-  // Видео-кружок: записать фронталкой → загрузить → отправить отдельным сообщением
-  const sendVideoNote = async () => {
-    setNoteBusy(true);
-    setUploadPct(null);
-    try {
-      const att = await recordVideoNote((f) => setUploadPct(f));
-      if (att) {
-        const msg = await sendChatMessage(chatId, '', undefined, att);
-        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
-        scrollToEnd();
+  // Тап по кнопке записи: переключение аудио ↔ видео (при первом включении
+  // видео сразу спрашиваем разрешения, чтобы зажатие потом стартовало мгновенно)
+  const toggleRecMode = async () => {
+    if (recMode === 'audio') {
+      setRecMode('video');
+      if (!camPerm?.granted) await requestCamPerm();
+      if (!micPerm?.granted) await requestMicPerm();
+    } else {
+      setRecMode('audio');
+    }
+  };
+
+  // Зажатие: старт записи (голос или кружок — по текущему режиму)
+  const startHoldRec = async () => {
+    heldRef.current = true;
+    if (recMode === 'audio') {
+      startRecording();
+      return;
+    }
+    // Видео-кружок в приложении: маунтим камеру, запись начнётся в onCameraReady
+    if (!camPerm?.granted || !micPerm?.granted) {
+      const c = camPerm?.granted ? camPerm : await requestCamPerm();
+      const m = micPerm?.granted ? micPerm : await requestMicPerm();
+      if (!c?.granted || !m?.granted) {
+        return Alert.alert('Нет доступа', 'Разрешите камеру и микрофон для видео-кружков.');
       }
-    } catch (e) {
-      Alert.alert('Ошибка', (e as Error).message);
-    } finally {
-      setNoteBusy(false);
-      setUploadPct(null);
+      return; // разрешения только что выдали — пусть зажмёт ещё раз
+    }
+    setVideoRec('preparing');
+  };
+
+  // Камера готова: если палец ещё на кнопке — стартуем запись кружка
+  const onCamReady = () => {
+    if (!heldRef.current || videoRecRef.current !== 'preparing') {
+      setVideoRec(null);
+      return;
+    }
+    setVideoRec('recording');
+    vidStartRef.current = Date.now();
+    setRecSecs(0);
+    recTimerRef.current = setInterval(() => setRecSecs((s) => s + 1), 1000);
+    camRef.current
+      ?.recordAsync({ maxDuration: 60 })
+      .then(async (res) => {
+        clearRecTimer();
+        setRecSecs(0);
+        const dur = Date.now() - vidStartRef.current;
+        if (!res?.uri || dur < 800) {
+          setVideoRec(null); // слишком коротко — не отправляем
+          return;
+        }
+        try {
+          setVideoRec('uploading');
+          setUploadPct(null);
+          const up = await uploadFile(res.uri, 'note.mp4', 'video/mp4', (f) => setUploadPct(f));
+          const att: Attachment = { url: up.url, type: 'video-note/mp4' };
+          const msg = await sendChatMessage(chatId, '', undefined, att);
+          setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+          scrollToEnd();
+        } catch (e) {
+          Alert.alert('Ошибка', (e as Error).message);
+        } finally {
+          setVideoRec(null);
+          setUploadPct(null);
+        }
+      })
+      .catch(() => {
+        clearRecTimer();
+        setRecSecs(0);
+        setVideoRec(null);
+      });
+  };
+
+  // Отпустили кнопку: остановить и отправить (или отменить, если не успело стартовать)
+  const endHoldRec = () => {
+    heldRef.current = false;
+    if (recMode === 'audio') {
+      if (recordingRef.current) stopRecordingAndSend();
+      return;
+    }
+    if (videoRecRef.current === 'recording') {
+      camRef.current?.stopRecording(); // recordAsync выше зарезолвится с uri
+    } else if (videoRecRef.current === 'preparing') {
+      setVideoRec(null);
     }
   };
 
@@ -595,89 +674,101 @@ export default function ChatScreen() {
           </ScrollView>
         )}
 
-        {/* Ввод */}
-        {isRecording ? (
-          <View className="flex-row items-center p-4 pt-2 gap-2">
-            <TouchableOpacity
-              onPress={cancelRecording}
-              className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-900 border border-red-500/40"
-            >
-              <Text className="text-lg">🗑</Text>
-            </TouchableOpacity>
-            <View className="flex-1 flex-row items-center bg-slate-900 rounded-2xl border border-red-500/40 px-4 h-14">
-              <View className="w-3 h-3 rounded-full bg-red-500 mr-3" />
-              <Text className="text-white font-mono flex-1">Запись… {fmtRec(recSecs)}</Text>
-            </View>
-            <TouchableOpacity
-              onPress={stopRecordingAndSend}
-              disabled={sending}
-              className={`h-14 w-14 rounded-2xl items-center justify-center ${sending ? 'bg-slate-700' : 'bg-cyan-600'}`}
-            >
-              <Text className="text-white text-xl">🚀</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <View className="flex-row items-end p-4 pt-2 gap-2">
-            <TouchableOpacity
-              onPress={attachMedia}
-              disabled={uploading || noteBusy}
-              className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-900 border border-slate-800"
-            >
-              {uploading ? (
-                uploadPct != null ? (
-                  <Text className="text-cyan-300 text-[10px] font-bold">{Math.round(uploadPct * 100)}%</Text>
-                ) : (
-                  <ActivityIndicator color="#22d3ee" size="small" />
-                )
+        {/* Ввод. Кнопка записи — как в Telegram: тап переключает 🎤/🎥,
+            зажатие пишет, отпускание отправляет. Во время записи кнопка
+            остаётся в той же позиции дерева — иначе потеряем onPressOut. */}
+        <View className="flex-row items-end p-4 pt-2 gap-2">
+          {isRecording || videoRec ? (
+            <View className={`flex-1 flex-row items-center bg-slate-900 rounded-2xl border px-4 h-14 ${videoRec === 'uploading' ? 'border-cyan-500/50' : 'border-red-500/40'}`}>
+              {videoRec === 'uploading' ? (
+                <>
+                  <ActivityIndicator color="#22d3ee" size="small" style={{ marginRight: 10 }} />
+                  <Text className="text-cyan-300 font-mono flex-1" numberOfLines={1}>
+                    Отправка кружка…{uploadPct != null ? ` ${Math.round(uploadPct * 100)}%` : ''}
+                  </Text>
+                </>
               ) : (
-                <Text className="text-xl">📎</Text>
+                <>
+                  <View className="w-3 h-3 rounded-full bg-red-500 mr-3" />
+                  <Text className="text-white font-mono flex-1" numberOfLines={1}>
+                    {videoRec === 'preparing' ? 'Камера…' : `Запись… ${fmtRec(recSecs)}`} · отпустите для отправки
+                  </Text>
+                </>
               )}
-            </TouchableOpacity>
-            <TextInput
-              multiline
-              placeholder={editing ? 'Изменить сообщение...' : 'Сообщение...'}
-              placeholderTextColor="#475569"
-              className="flex-1 bg-slate-900 text-white p-4 py-3 rounded-2xl border border-slate-800 min-h-[52px] max-h-32"
-              value={text}
-              onChangeText={setText}
-            />
-            {text.trim() || editing || attachments.length > 0 ? (
+            </View>
+          ) : (
+            <>
               <TouchableOpacity
-                onPress={send}
-                disabled={sending}
-                className={`h-14 w-14 rounded-2xl items-center justify-center ${sending ? 'bg-slate-700' : editing ? 'bg-emerald-600' : 'bg-cyan-600'}`}
+                onPress={attachMedia}
+                disabled={uploading}
+                className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-900 border border-slate-800"
               >
-                <Text className="text-white text-xl">{editing ? '✓' : '🚀'}</Text>
-              </TouchableOpacity>
-            ) : (
-              <>
-                <TouchableOpacity
-                  onPress={sendVideoNote}
-                  disabled={noteBusy || uploading}
-                  className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-800 border border-slate-700"
-                >
-                  {noteBusy ? (
-                    uploadPct != null ? (
-                      <Text className="text-cyan-300 text-[10px] font-bold">{Math.round(uploadPct * 100)}%</Text>
-                    ) : (
-                      <ActivityIndicator color="#22d3ee" size="small" />
-                    )
+                {uploading ? (
+                  uploadPct != null ? (
+                    <Text className="text-cyan-300 text-[10px] font-bold">{Math.round(uploadPct * 100)}%</Text>
                   ) : (
-                    <Ionicons name="videocam" size={22} color="#94a3b8" />
-                  )}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={startRecording}
-                  disabled={noteBusy}
-                  className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-800 border border-slate-700"
-                >
-                  <Ionicons name="mic" size={22} color="#94a3b8" />
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
+                    <ActivityIndicator color="#22d3ee" size="small" />
+                  )
+                ) : (
+                  <Text className="text-xl">📎</Text>
+                )}
+              </TouchableOpacity>
+              <TextInput
+                multiline
+                placeholder={editing ? 'Изменить сообщение...' : 'Сообщение...'}
+                placeholderTextColor="#475569"
+                className="flex-1 bg-slate-900 text-white p-4 py-3 rounded-2xl border border-slate-800 min-h-[52px] max-h-32"
+                value={text}
+                onChangeText={setText}
+              />
+            </>
+          )}
+          {text.trim() || editing || attachments.length > 0 ? (
+            <TouchableOpacity
+              onPress={send}
+              disabled={sending}
+              className={`h-14 w-14 rounded-2xl items-center justify-center ${sending ? 'bg-slate-700' : editing ? 'bg-emerald-600' : 'bg-cyan-600'}`}
+            >
+              <Text className="text-white text-xl">{editing ? '✓' : '🚀'}</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={toggleRecMode}
+              onLongPress={startHoldRec}
+              onPressOut={endHoldRec}
+              delayLongPress={200}
+              disabled={uploading || videoRec === 'uploading'}
+              className={`h-14 w-14 rounded-2xl items-center justify-center border ${isRecording || videoRec ? 'bg-red-600 border-red-400' : 'bg-slate-800 border-slate-700'}`}
+            >
+              <Ionicons name={recMode === 'video' ? 'videocam' : 'mic'} size={24} color="#fff" />
+            </TouchableOpacity>
+          )}
+        </View>
       </KeyboardAvoidingView>
+
+      {/* Оверлей записи кружка: круглая фронталка по центру. pointerEvents=none —
+          тач продолжает жить на зажатой кнопке записи. */}
+      {(videoRec === 'preparing' || videoRec === 'recording') && (
+        <View
+          pointerEvents="none"
+          className="absolute inset-0 items-center justify-center bg-black/70"
+          style={{ zIndex: 50, elevation: 50 }}
+        >
+          <View className="w-72 h-72 rounded-full overflow-hidden border-2 border-red-500 bg-black">
+            <CameraView
+              ref={camRef}
+              style={{ width: '100%', height: '100%' }}
+              facing="front"
+              mode="video"
+              videoQuality="480p"
+              onCameraReady={onCamReady}
+            />
+          </View>
+          <Text className="text-white font-mono mt-4">
+            {videoRec === 'recording' ? `● ${fmtRec(recSecs)} / 1:00` : 'Камера запускается…'}
+          </Text>
+        </View>
+      )}
 
       {/* Контекстное меню сообщения */}
       <Modal

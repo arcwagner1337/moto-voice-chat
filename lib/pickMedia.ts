@@ -56,23 +56,4 @@ export async function pickAndUploadMany(
   return out;
 }
 
-// Видео-кружок (как в Telegram): запись фронталкой через системную камеру,
-// загрузка с типом video-note/* — по нему чат рендерит круглый плеер.
-// Старые клиенты видят его как обычное видео (type.startsWith('video')).
-export async function recordVideoNote(
-  onProgress?: (frac: number) => void
-): Promise<Attachment | null> {
-  const perm = await ImagePicker.requestCameraPermissionsAsync();
-  if (!perm.granted) throw new Error('Нет доступа к камере');
-  const res = await ImagePicker.launchCameraAsync({
-    mediaTypes: ['videos'],
-    cameraType: ImagePicker.CameraType.front,
-    videoMaxDuration: 60,
-  });
-  if (res.canceled || !res.assets?.length) return null;
-  const a = res.assets[0];
-  const { name, type } = assetMeta(a);
-  const up = await uploadFile(a.uri, name, type, onProgress);
-  const subtype = (type.split('/')[1] || 'mp4').slice(0, 20);
-  return { url: up.url, type: `video-note/${subtype}` };
-}
+// (Кружки пишутся прямо в приложении через expo-camera — см. app/chat/[id].tsx)

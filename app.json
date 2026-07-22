@@ -2,7 +2,7 @@
   "expo": {
     "name": "MeshVoice",
     "slug": "moto-voice-chat",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "scheme": "my-app",
     "platforms": [
       "ios",
@@ -43,6 +43,13 @@
         "expo-image-picker",
         {
           "photosPermission": "Доступ к галерее нужен, чтобы прикреплять фото и видео к сообщениям, событиям и меткам на карте."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Камера нужна для записи видео-кружков в чате.",
+          "microphonePermission": "Микрофон нужен для звука в видео-кружках и голосовых сообщениях."
         }
       ]
     ],

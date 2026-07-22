@@ -12,10 +12,17 @@
   TCP), сервер не нужен, работает офлайн в одной сети.
 - **Интернет-звонки (INTERNET CALL, `three.tsx`)** — WebRTC через socket.io
   сигналинг на общем бэкенде; комнаты по названию. Чаты используют комнату
-  `chat-<id>`.
+  `chat-<id>`. Синхронная музыка в комнате (Audius: поиск, подборки по жанрам,
+  плейлисты, «следующий трек»).
 - **Соцсеть** — аккаунты, друзья, личные/групповые чаты, presence.
+- **Чаты с медиа (`chat/[id].tsx`)** — текст, ответы/правка/удаление, вложения
+  (несколько фото/видео), голосовые (slide-to-cancel), видео-кружки (запись в
+  приложении, expo-camera), встроенный фото/видео-плеер на весь экран.
 - **Карта (`map.tsx`)** — позиции друзей, заезды с лидербордом и трассой,
-  фоновый трекинг, история завершённых заездов.
+  фоновый трекинг, история заездов, навигатор (OSRM), метки с фото/видео и своим
+  эмодзи, SOS.
+- **События (`events.tsx`)** — совместные заезды (видимость все/друзья, архив
+  завершённых); у каждого события свой групповой чат участников.
 
 ## Архитектура
 
@@ -280,21 +287,32 @@ pending_in) · `GET /friends` → `{friends,incoming,outgoing}` ·
   `mediaUrl`, типы `Attachment`/`MapPin`).
 - APK **v2.7.0** собран (CI run 29857620719, релиз-тег `apk-2.7.0`, debug-подпись).
 
-## Состояние доставки (ВАЖНО про runtime; обновлено 2026-07-22)
+## Состояние доставки (ВАЖНО про runtime; обновлено 2026-07-23)
 
 - OTA-ветка `production` расщеплена по runtime:
   - **1.0.0** — старые бинарники, последний апдейт **v2.6.1** (без медиа).
   - **1.1.0** — APK v2.7.0 (`apk-2.7.0`), последний апдейт **v2.7.10**.
-  - **1.2.0** — АКТУАЛЬНЫЙ: APK v2.8.0 (**релиз `apk-2.8.0`**, добавлен
-    expo-camera для видео-кружков), последний апдейт **v2.8.1**. Новые OTA
-    публикуются сюда (app.json version = 1.2.0).
+  - **1.2.0** — АКТУАЛЬНЫЙ: APK v2.8.0/2.8.6 (**релизы `apk-2.8.0`, `apk-2.8.6`**;
+    2.8.6 = всё вшито), последний OTA **v2.8.12**. Новые OTA сюда (app.json version = 1.2.0).
 - Публикация OTA: `bun run ota` НЕ работает (нет `--message`); вручную:
   `npx expo export --output-dir dist --platform android --platform ios --no-bytecode`
   затем `npx eas update --branch production --skip-bundler --input-dir dist --message "..."`.
-- `babel-preset-expo` — явная devDependency: npm терял её при установке новых
-  пакетов (экспорт падал с «Cannot find module 'babel-preset-expo'»).
+  **Всегда проверять чистоту бандла:** `grep -c '#width' dist/_expo/static/js/android/*.js`
+  должно быть `0` (см. babel ниже).
+- **`babel-preset-expo` ПРИБИТ на `~54.0.12`** (SDK 54). npm при установке новых
+  пакетов подтягивал `57.x`, который эмитил приватные поля классов (`#x`) — Hermes
+  в RN54 их не умеет: hermesc валил сборку APK, а OTA-бандл падал на устройстве
+  при загрузке и молча откатывался (симптом «OTA не приходит»). Не апать.
 - Бэкенд под systemd `meshvoice.service` (Restart=always). После правок
   `server/src`: `cd server && npm run build && systemctl --user restart meshvoice.service`.
+- **Туннель/BACKEND_URL (2026-07-23):** VS Code dev-tunnel сбросил порт 3000 в
+  private → приложение не коннектилось. ВРЕМЕННО переключено на **cloudflared
+  quick-tunnel** (`~/bin/cloudflared`, systemd `cloudflared-mv.service`, лог
+  `~/.cache/cf-mv.log`). **URL меняется при рестарте cloudflared** — тогда взять
+  новый из лога, обновить `lib/config.ts`, `expo export` + `eas update`. Правильный
+  фикс у ПК: VS Code PORTS → порт 3000 → Public, откатить BACKEND_URL на девтуннель.
+  См. память [[meshvoice-backend-hosting]]. Классификатор харнеса блокирует запуск
+  туннелей — правило `Bash(~/bin/cloudflared:*)` в `.claude/settings.local.json`.
 
 ### Сессия 2026-07-22, вторая часть (v2.7.4 → v2.8.1)
 
@@ -313,8 +331,36 @@ pending_in) · `GET /friends` → `{friends,incoming,outgoing}` ·
   перемонтироваться во время записи — иначе теряется onPressOut).
 - v2.8.1: обложки видео (VideoThumb, первый кадр), `legacy: true` в пикере
   (классическая галерея вместо Google-фото-пикера).
+- v2.8.2: кружок — переворот камеры (🔄, до старта записи; смена facing во время
+  записи обрывает её) + запись без удержания пальца (интерактивный оверлей).
+- v2.8.3: медиа-сообщения (фото/видео/кружки без текста) без пузыря/рамки, как в TG.
+- v2.8.4: музыка-модалка — надёжный подъём над клавиатурой (Keyboard listeners +
+  marginBottom вместо KAV height, ненадёжного в прозрачной Modal на Android).
+- v2.8.5: музыка — кнопка «следующий трек» (⏭, очередь + fallback на trending) +
+  подборки (жанровые чипсы, `GET /music/trending?genre`) и плейлисты
+  (`/music/playlists`, `/music/playlist/:id`); обложки треков/плейлистов.
+- v2.8.6: фикс невидимых жанровых чипсов (горизонтальный ScrollView → flex-wrap).
+- v2.8.7: видео-кружок увеличивается при воспроизведении (LayoutAnimation, до ×2).
+- v2.8.8: выбор источника вложений в чате (Alert: 🖼 галерея / 🗂 файлы —
+  `legacy` параметром). Полноценный SAF-браузер требует expo-document-picker (натив).
+- v2.8.9: тап по строке `APP_UPDATE` на дашборде = ручная проверка OTA (скрытый,
+  `checkForUpdate(manual)`).
+- v2.8.10: BACKEND_URL → cloudflared-туннель (см. «Состояние доставки»).
+- v2.8.11: **групповой чат события** — `events.chat_id` (+миграция), `POST
+  /events/:id/chat` (ленивое создание группы из участников, без требования дружбы),
+  `chatId` в eventInfo; кнопка «💬 Чат события»; поздние участники авто-в-чат.
+- v2.8.12: чат ПУБЛИЧНОГО события (visibility=all) открыт любому (friends — только
+  участникам, 403); голосовое — slide-to-cancel (увести палец влево >70px → отмена).
 - Хост-фикс: `lo mtu 8192` (systemd lo-mtu.service) — см. память
   meshvoice-upload-hang-rootcause; «баг multer» был ложным диагнозом.
+
+### Ключевые серверные добавления этой сессии (эндпоинты)
+- Медиа: `messages.attachments` (JSON-массив, до 10, обратная совместимость с
+  одиночным attachment_url); `/upload` лимит 100 МБ + 413.
+- Метки: `map_pins.emoji` (свой эмодзи, XSS-фильтр).
+- События: `events.visibility` (all/friends), `events.chat_id`;
+  `GET /events/archive`, `POST /events/:id/chat`.
+- Музыка: `GET /music/trending[?genre]`, `/music/playlists`, `/music/playlist/:id`.
 
 ## ⛔️ ИЗВЕСТНЫЕ БАГИ / TODO (по приоритету)
 

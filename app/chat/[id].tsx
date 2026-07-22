@@ -15,7 +15,16 @@ import {
   PanResponder,
   Linking,
   Image,
+  Dimensions,
+  LayoutAnimation,
+  UIManager,
+  Platform,
 } from 'react-native';
+
+// LayoutAnimation на старой архитектуре Android требует явного включения
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import {
   ChatMessage,
   ChatSummary,
@@ -1018,10 +1027,18 @@ function VoicePlayer({ url, mine }: { url: string; mine: boolean }) {
   );
 }
 
-// Видео-кружок (как в Telegram): круглый инлайн-плеер, играет один раз по тапу
+// Видео-кружок (как в Telegram): круглый инлайн-плеер, играет один раз по тапу.
+// При воспроизведении кружок увеличивается (до ×2, но не шире экрана).
+const VN_BASE = 200;
+const VN_BIG = Math.min(VN_BASE * 2, Math.round(Dimensions.get('window').width * 0.82));
 function VideoNote({ url }: { url: string }) {
   const videoRef = useRef<Video>(null);
   const [playing, setPlaying] = useState(false);
+
+  const setPlayingAnimated = (v: boolean) => {
+    LayoutAnimation.configureNext(LayoutAnimation.create(220, 'easeInEaseOut', 'scaleXY'));
+    setPlaying(v);
+  };
 
   const toggle = async () => {
     try {
@@ -1036,9 +1053,11 @@ function VideoNote({ url }: { url: string }) {
     } catch {}
   };
 
+  const size = playing ? VN_BIG : VN_BASE;
+
   return (
     <TouchableOpacity activeOpacity={0.85} onPress={toggle} className="mb-1">
-      <View className="w-52 h-52 rounded-full overflow-hidden bg-black">
+      <View style={{ width: size, height: size, borderRadius: size / 2 }} className="overflow-hidden bg-black">
         <Video
           ref={videoRef}
           source={{ uri: url }}
@@ -1047,10 +1066,10 @@ function VideoNote({ url }: { url: string }) {
           isLooping={false}
           onPlaybackStatusUpdate={(st) => {
             if (!st.isLoaded) return;
-            setPlaying(st.isPlaying);
+            if (st.isPlaying !== playing) setPlayingAnimated(st.isPlaying);
             if (st.didJustFinish) {
               // один раз: стоп + в начало (иначе setPosition при shouldPlay зациклит)
-              setPlaying(false);
+              setPlayingAnimated(false);
               videoRef.current?.setStatusAsync({ shouldPlay: false, positionMillis: 0 }).catch(() => {});
             }
           }}

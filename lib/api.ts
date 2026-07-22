@@ -1,4 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+// Legacy-API expo-file-system (SDK 54): uploadAsync/createUploadTask стримят файл
+// с диска и дают прогресс — критично для больших видео (fetch+FormData прогресса не даёт).
+import * as FileSystem from 'expo-file-system/legacy';
 import { BACKEND_URL } from './config';
 
 const TOKEN_KEY = '@auth_token';
@@ -74,20 +77,44 @@ export async function getToken(): Promise<string | null> {
 
 export type Upload = { url: string; type: string; name: string; size: number };
 
-// Загрузка файла (фото/видео) на сервер → относительный url в /uploads
-export async function uploadFile(uri: string, name: string, type: string): Promise<Upload> {
+// Загрузка файла (фото/видео/аудио) на сервер → относительный url в /uploads.
+// onProgress: 0..1 — доля отправленных байт (для индикатора на больших видео).
+export async function uploadFile(
+  uri: string,
+  name: string,
+  type: string,
+  onProgress?: (frac: number) => void
+): Promise<Upload> {
   const base = await getApiBase();
   const token = await getToken();
-  const form = new FormData();
-  form.append('file', { uri, name, type } as any);
-  const res = await fetch(`${base}/api/upload`, {
-    method: 'POST',
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: form,
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить файл');
-  return data;
+  const task = FileSystem.createUploadTask(
+    `${base}/api/upload`,
+    uri,
+    {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName: 'file',
+      mimeType: type,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    },
+    (p) => {
+      if (onProgress && p.totalBytesExpectedToSend > 0) {
+        onProgress(Math.min(1, p.totalBytesSent / p.totalBytesExpectedToSend));
+      }
+    }
+  );
+  const res = await task.uploadAsync();
+  if (!res) throw new Error('Загрузка прервана');
+  let data: any = {};
+  try {
+    data = JSON.parse(res.body || '{}');
+  } catch {}
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(data?.error || `Не удалось загрузить файл (${res.status})`);
+  }
+  // Имя файла в multipart берётся из uri — тип пробрасываем свой, чтобы
+  // не потерять исходный mime (сервер может отдать octet-stream).
+  return { ...data, type: data.type && data.type !== 'application/octet-stream' ? data.type : type };
 }
 
 // Относительный путь с сервера → полный URL для показа медиа

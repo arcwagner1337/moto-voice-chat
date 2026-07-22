@@ -26,13 +26,23 @@ const upload = multer({
       cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`);
     },
   }),
-  limits: { fileSize: 60 * 1024 * 1024 }, // 60 МБ — фото/короткое видео
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100 МБ — фото/видео/кружки
 });
 
-api.post('/upload', requireAuth, upload.single('file'), (req, res) => {
-  const f = (req as any).file;
-  if (!f) return res.status(400).json({ error: 'Файл не получен' });
-  res.json({ url: `/uploads/${f.filename}`, type: f.mimetype, name: f.originalname || 'file', size: f.size });
+api.post('/upload', requireAuth, (req, res) => {
+  // multer вызывается вручную, чтобы отдать клиенту внятную ошибку
+  // (иначе LIMIT_FILE_SIZE улетает в общий обработчик голым 500-м)
+  upload.single('file')(req, res, (err: any) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'Файл слишком большой (макс. 100 МБ)' });
+      }
+      return res.status(400).json({ error: `Не удалось принять файл: ${err.message || err}` });
+    }
+    const f = (req as any).file;
+    if (!f) return res.status(400).json({ error: 'Файл не получен' });
+    res.json({ url: `/uploads/${f.filename}`, type: f.mimetype, name: f.originalname || 'file', size: f.size });
+  });
 });
 
 // ---------- Аккаунты ----------

@@ -36,7 +36,8 @@ import {
   uploadFile,
 } from '../../lib/api';
 import { Audio, Video, ResizeMode } from 'expo-av';
-import { pickAndUpload, pickAndUploadMany } from '../../lib/pickMedia';
+import { Ionicons } from '@expo/vector-icons';
+import { pickAndUploadMany, recordVideoNote } from '../../lib/pickMedia';
 import { getSocialSocket } from '../../lib/socialSocket';
 import { setOpenChat, cancelChatNotification } from '../../lib/notifications';
 
@@ -58,6 +59,9 @@ export default function ChatScreen() {
   const [menuMsg, setMenuMsg] = useState<ChatMessage | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  // Прогресс загрузки 0..1 (большие видео) и занятость записи кружка
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
+  const [noteBusy, setNoteBusy] = useState(false);
   // Полноэкранный просмотр внутри приложения
   const [fullImage, setFullImage] = useState<string | null>(null);
   const [fullVideo, setFullVideo] = useState<string | null>(null);
@@ -70,8 +74,9 @@ export default function ChatScreen() {
 
   const attachMedia = async () => {
     setUploading(true);
+    setUploadPct(null);
     try {
-      const arr = await pickAndUploadMany(true, 10);
+      const arr = await pickAndUploadMany(true, 10, (f) => setUploadPct(f));
       if (arr.length) {
         setAttachments((prev) => [...prev, ...arr].slice(0, 10));
         setEditing(null); // к правке файлы не цепляем
@@ -80,6 +85,26 @@ export default function ChatScreen() {
       Alert.alert('Ошибка', (e as Error).message);
     } finally {
       setUploading(false);
+      setUploadPct(null);
+    }
+  };
+
+  // Видео-кружок: записать фронталкой → загрузить → отправить отдельным сообщением
+  const sendVideoNote = async () => {
+    setNoteBusy(true);
+    setUploadPct(null);
+    try {
+      const att = await recordVideoNote((f) => setUploadPct(f));
+      if (att) {
+        const msg = await sendChatMessage(chatId, '', undefined, att);
+        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        scrollToEnd();
+      }
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    } finally {
+      setNoteBusy(false);
+      setUploadPct(null);
     }
   };
 
@@ -594,10 +619,18 @@ export default function ChatScreen() {
           <View className="flex-row items-end p-4 pt-2 gap-2">
             <TouchableOpacity
               onPress={attachMedia}
-              disabled={uploading}
+              disabled={uploading || noteBusy}
               className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-900 border border-slate-800"
             >
-              {uploading ? <ActivityIndicator color="#22d3ee" size="small" /> : <Text className="text-xl">📎</Text>}
+              {uploading ? (
+                uploadPct != null ? (
+                  <Text className="text-cyan-300 text-[10px] font-bold">{Math.round(uploadPct * 100)}%</Text>
+                ) : (
+                  <ActivityIndicator color="#22d3ee" size="small" />
+                )
+              ) : (
+                <Text className="text-xl">📎</Text>
+              )}
             </TouchableOpacity>
             <TextInput
               multiline
@@ -616,12 +649,30 @@ export default function ChatScreen() {
                 <Text className="text-white text-xl">{editing ? '✓' : '🚀'}</Text>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity
-                onPress={startRecording}
-                className="h-14 w-14 rounded-2xl items-center justify-center bg-slate-800 border border-slate-700"
-              >
-                <Text className="text-xl">🎤</Text>
-              </TouchableOpacity>
+              <>
+                <TouchableOpacity
+                  onPress={sendVideoNote}
+                  disabled={noteBusy || uploading}
+                  className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-800 border border-slate-700"
+                >
+                  {noteBusy ? (
+                    uploadPct != null ? (
+                      <Text className="text-cyan-300 text-[10px] font-bold">{Math.round(uploadPct * 100)}%</Text>
+                    ) : (
+                      <ActivityIndicator color="#22d3ee" size="small" />
+                    )
+                  ) : (
+                    <Ionicons name="videocam" size={22} color="#94a3b8" />
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={startRecording}
+                  disabled={noteBusy}
+                  className="h-14 w-12 rounded-2xl items-center justify-center bg-slate-800 border border-slate-700"
+                >
+                  <Ionicons name="mic" size={22} color="#94a3b8" />
+                </TouchableOpacity>
+              </>
             )}
           </View>
         )}
@@ -787,16 +838,18 @@ function VoicePlayer({ url, mine }: { url: string; mine: boolean }) {
       await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
       const { sound } = await Audio.Sound.createAsync(
         { uri: url },
-        { shouldPlay: true },
+        { shouldPlay: true, isLooping: false },
         (st) => {
           if (!st.isLoaded) return;
           setPos(st.positionMillis || 0);
           setDur(st.durationMillis || 0);
           setPlaying(st.isPlaying);
           if (st.didJustFinish) {
+            // Играем ровно один раз: стоп + перемотка в начало одним вызовом
+            // (setPositionAsync при активном shouldPlay перезапускал бы звук по кругу).
             setPlaying(false);
             setPos(0);
-            soundRef.current?.setPositionAsync(0).catch(() => {});
+            soundRef.current?.setStatusAsync({ shouldPlay: false, positionMillis: 0 }).catch(() => {});
           }
         }
       );
@@ -814,11 +867,13 @@ function VoicePlayer({ url, mine }: { url: string; mine: boolean }) {
 
   return (
     <TouchableOpacity onPress={toggle} className="flex-row items-center py-1 mb-1" style={{ minWidth: 180 }}>
-      {loading ? (
-        <ActivityIndicator color={mine ? '#a5f3fc' : '#22d3ee'} size="small" style={{ marginRight: 10, width: 26 }} />
-      ) : (
-        <Text className="text-2xl mr-2" style={{ width: 26 }}>{playing ? '⏸️' : '▶️'}</Text>
-      )}
+      <View className={`w-10 h-10 rounded-full items-center justify-center mr-2.5 ${mine ? 'bg-cyan-500' : 'bg-cyan-600'}`}>
+        {loading ? (
+          <ActivityIndicator color="#fff" size="small" />
+        ) : (
+          <Ionicons name={playing ? 'pause' : 'play'} size={20} color="#fff" style={playing ? undefined : { marginLeft: 2 }} />
+        )}
+      </View>
       <View className="flex-1">
         <View className={`h-1 rounded-full overflow-hidden ${track}`}>
           <View className={`h-1 rounded-full ${accent}`} style={{ width: `${pct}%` }} />
@@ -826,6 +881,55 @@ function VoicePlayer({ url, mine }: { url: string; mine: boolean }) {
         <Text className={`text-[9px] mt-1 ${mine ? 'text-cyan-200' : 'text-slate-400'}`}>
           🎤 {dur ? `${fmt(pos)} / ${fmt(dur)}` : 'Голосовое'}
         </Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// Видео-кружок (как в Telegram): круглый инлайн-плеер, играет один раз по тапу
+function VideoNote({ url }: { url: string }) {
+  const videoRef = useRef<Video>(null);
+  const [playing, setPlaying] = useState(false);
+
+  const toggle = async () => {
+    try {
+      const v = videoRef.current;
+      if (!v) return;
+      if (playing) {
+        await v.pauseAsync();
+      } else {
+        await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
+        await v.playAsync();
+      }
+    } catch {}
+  };
+
+  return (
+    <TouchableOpacity activeOpacity={0.85} onPress={toggle} className="mb-1">
+      <View className="w-52 h-52 rounded-full overflow-hidden bg-black border-2 border-cyan-500/40">
+        <Video
+          ref={videoRef}
+          source={{ uri: url }}
+          style={{ width: '100%', height: '100%' }}
+          resizeMode={ResizeMode.COVER}
+          isLooping={false}
+          onPlaybackStatusUpdate={(st) => {
+            if (!st.isLoaded) return;
+            setPlaying(st.isPlaying);
+            if (st.didJustFinish) {
+              // один раз: стоп + в начало (иначе setPosition при shouldPlay зациклит)
+              setPlaying(false);
+              videoRef.current?.setStatusAsync({ shouldPlay: false, positionMillis: 0 }).catch(() => {});
+            }
+          }}
+        />
+        {!playing && (
+          <View className="absolute inset-0 items-center justify-center bg-black/25">
+            <View className="w-14 h-14 rounded-full bg-black/50 items-center justify-center">
+              <Ionicons name="play" size={28} color="#fff" style={{ marginLeft: 3 }} />
+            </View>
+          </View>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -907,12 +1011,16 @@ function MessageBubble({
               : [];
             if (!atts.length) return null;
             const audios = atts.filter((a) => a.type.startsWith('audio'));
-            const media = atts.filter((a) => !a.type.startsWith('audio'));
+            const notes = atts.filter((a) => a.type.startsWith('video-note'));
+            const media = atts.filter((a) => !a.type.startsWith('audio') && !a.type.startsWith('video-note'));
             const dim = media.length === 1 ? 'w-52 h-52' : 'w-24 h-24';
             return (
               <View className="mb-1">
                 {audios.map((a, i) => (
                   <VoicePlayer key={`aud${i}`} url={mediaUrl(a.url)} mine={mine} />
+                ))}
+                {notes.map((a, i) => (
+                  <VideoNote key={`vn${i}`} url={mediaUrl(a.url)} />
                 ))}
                 {media.length > 0 && (
                   <View className="flex-row flex-wrap" style={{ gap: 4, maxWidth: 224 }}>

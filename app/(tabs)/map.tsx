@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { useKeepAwake } from 'expo-keep-awake';
 import ScreenHeader from '../../components/ScreenHeader';
+import VideoPlayerModal from '../../components/VideoPlayerModal';
 import {
   SocialUser,
   RideInfo,
@@ -226,8 +227,9 @@ export default function MapScreen() {
   const [savingPin, setSavingPin] = useState(false);
   const [uploadingPinMedia, setUploadingPinMedia] = useState(false);
   const [viewingPin, setViewingPin] = useState<MapPin | null>(null);
-  // URL картинки для полноэкранного просмотра внутри приложения
+  // URL картинки/видео для полноэкранного просмотра внутри приложения
   const [fullImage, setFullImage] = useState<string | null>(null);
+  const [fullVideo, setFullVideo] = useState<string | null>(null);
 
   // SOS: экстренное оповещение друзей. Пустой список получателей = всем друзьям.
   const [sosRecipients, setSosRecipients] = useState<number[]>([]);
@@ -2101,12 +2103,12 @@ export default function MapScreen() {
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
-                    onPress={() => Linking.openURL(mediaUrl(viewingPin.media!.url)).catch(() => {})}
+                    onPress={() => setFullVideo(mediaUrl(viewingPin.media!.url))}
                     activeOpacity={0.9}
                   >
                     <View className="w-full h-40 bg-slate-950 items-center justify-center">
-                      <Text className="text-4xl">🎬</Text>
-                      <Text className="text-cyan-300 text-xs underline mt-2">Открыть видео</Text>
+                      <Text className="text-4xl">▶️</Text>
+                      <Text className="text-cyan-300 text-xs mt-2">Смотреть видео</Text>
                     </View>
                   </TouchableOpacity>
                 )
@@ -2159,6 +2161,9 @@ export default function MapScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* Встроенный видеоплеер (видео меток) */}
+      <VideoPlayerModal url={fullVideo} onClose={() => setFullVideo(null)} />
     </View>
   );
 }

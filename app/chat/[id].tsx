@@ -40,6 +40,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { pickAndUploadMany, recordVideoNote } from '../../lib/pickMedia';
 import { getSocialSocket } from '../../lib/socialSocket';
 import { setOpenChat, cancelChatNotification } from '../../lib/notifications';
+import VideoPlayerModal from '../../components/VideoPlayerModal';
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -732,27 +733,8 @@ export default function ChatScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* Полноэкранное видео внутри приложения */}
-      <Modal visible={!!fullVideo} transparent animationType="fade" onRequestClose={() => setFullVideo(null)}>
-        <View className="flex-1 bg-black items-center justify-center">
-          {fullVideo && (
-            <Video
-              source={{ uri: fullVideo }}
-              style={{ width: '100%', height: '100%' }}
-              resizeMode={ResizeMode.CONTAIN}
-              useNativeControls
-              shouldPlay
-            />
-          )}
-          <TouchableOpacity
-            onPress={() => setFullVideo(null)}
-            style={{ position: 'absolute', top: 48, right: 16 }}
-            className="w-10 h-10 rounded-full bg-black/60 border border-white/20 items-center justify-center"
-          >
-            <Text className="text-white text-lg">✕</Text>
-          </TouchableOpacity>
-        </View>
-      </Modal>
+      {/* Встроенный видеоплеер */}
+      <VideoPlayerModal url={fullVideo} onClose={() => setFullVideo(null)} />
     </View>
   );
 }

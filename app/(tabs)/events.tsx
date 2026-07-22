@@ -26,6 +26,7 @@ import {
   getSavedUser,
   getEvents,
   getEventsArchive,
+  openEventChat,
   createEvent,
   joinEvent,
   leaveEvent,
@@ -229,6 +230,19 @@ export default function EventsScreen() {
       refresh();
     } catch (e) {
       Alert.alert('Ошибка', (e as Error).message);
+    }
+  };
+
+  const [openingChat, setOpeningChat] = useState<number | null>(null);
+  const enterChat = async (ev: EventInfo) => {
+    setOpeningChat(ev.id);
+    try {
+      const chatId = await openEventChat(ev.id);
+      router.push(`/chat/${chatId}`);
+    } catch (e) {
+      Alert.alert('Ошибка', (e as Error).message);
+    } finally {
+      setOpeningChat(null);
     }
   };
 
@@ -548,6 +562,18 @@ export default function EventsScreen() {
                 )}
                 {ev.finished && ev.joined && !ev.mine && (
                   <Text className="text-slate-500 text-[10px] mt-3">✓ Вы участвовали в этой поездке</Text>
+                )}
+
+                {/* Групповой чат события — участникам: поделиться фото/видео/впечатлениями */}
+                {(ev.mine || ev.joined) && (
+                  <TouchableOpacity
+                    onPress={() => enterChat(ev)}
+                    disabled={openingChat === ev.id}
+                    className="mt-2 p-3 rounded-2xl items-center flex-row justify-center bg-violet-600"
+                  >
+                    {openingChat === ev.id && <ActivityIndicator color="#fff" size="small" style={{ marginRight: 8 }} />}
+                    <Text className="text-white font-bold text-[11px] uppercase">💬 Чат события</Text>
+                  </TouchableOpacity>
                 )}
                 </>
               );

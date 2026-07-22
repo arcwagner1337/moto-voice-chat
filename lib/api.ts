@@ -309,6 +309,7 @@ export type EventInfo = {
   route: { id: number; name: string } | null;
   photo: string | null;
   visibility: 'all' | 'friends';
+  chatId: number | null;
   startAt: number;
   finished: boolean;
   createdAt: number;
@@ -380,6 +381,10 @@ export const leaveEvent = (id: number) =>
 
 export const deleteEvent = (id: number) =>
   request(`/events/${id}`, { method: 'DELETE' });
+
+// Открыть/создать групповой чат события (участники делятся фото/видео/впечатлениями)
+export const openEventChat = (id: number) =>
+  request<{ chatId: number }>(`/events/${id}/chat`, { method: 'POST' }).then((d) => d.chatId);
 
 // ---------- Музыка (Audius) ----------
 

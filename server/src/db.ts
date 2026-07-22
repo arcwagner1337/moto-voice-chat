@@ -158,6 +158,7 @@ const migrations = [
   'ALTER TABLE messages ADD COLUMN attachments TEXT',
   'ALTER TABLE map_pins ADD COLUMN emoji TEXT',
   "ALTER TABLE events ADD COLUMN visibility TEXT NOT NULL DEFAULT 'friends'",
+  'ALTER TABLE events ADD COLUMN chat_id INTEGER',
 ];
 for (const m of migrations) {
   try {
@@ -327,6 +328,7 @@ export function eventInfo(eventId: number, viewerId?: number) {
     route,
     photo: e.photo || null,
     visibility: (e.visibility || 'friends') as 'all' | 'friends',
+    chatId: e.chat_id || null,
     startAt: e.start_at,
     finished: e.start_at <= Date.now(),
     createdAt: e.created_at,

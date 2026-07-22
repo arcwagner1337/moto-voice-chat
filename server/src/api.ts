@@ -1234,11 +1234,53 @@ api.get('/events/archive', requireAuth, (req, res) => {
 api.post('/events/:id/join', requireAuth, (req, res) => {
   const userId = (req as AuthedRequest).userId;
   const eventId = Number(req.params.id);
-  const e: any = db.prepare('SELECT creator_id FROM events WHERE id = ?').get(eventId);
+  const e: any = db.prepare('SELECT creator_id, chat_id FROM events WHERE id = ?').get(eventId);
   if (!e) return res.status(404).json({ error: 'Событие не найдено' });
   db.prepare('INSERT OR IGNORE INTO event_members (event_id, user_id, joined_at) VALUES (?, ?, ?)').run(eventId, userId, now());
+  // Если у события уже есть групповой чат — сразу добавляем присоединившегося
+  if (e.chat_id && !isChatMember(e.chat_id, userId)) {
+    db.prepare('INSERT INTO chat_members (chat_id, user_id, joined_at) VALUES (?, ?, ?)').run(e.chat_id, userId, now());
+    notifyUser(userId, 'chats:update', {});
+  }
   for (const uid of eventAudience(eventId, e.creator_id)) notifyUser(uid, 'events:update', {});
   res.json({ event: eventInfo(eventId, userId) });
+});
+
+// Групповой чат события: создаём лениво при первом входе, участники события
+// (без требования дружбы) могут писать и делиться фото/видео после заезда.
+api.post('/events/:id/chat', requireAuth, (req, res) => {
+  const userId = (req as AuthedRequest).userId;
+  const eventId = Number(req.params.id);
+  const e: any = db.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
+  if (!e) return res.status(404).json({ error: 'Событие не найдено' });
+  const isParticipant =
+    e.creator_id === userId ||
+    !!db.prepare('SELECT 1 FROM event_members WHERE event_id = ? AND user_id = ?').get(eventId, userId);
+  if (!isParticipant) return res.status(403).json({ error: 'Сначала присоединитесь к событию' });
+
+  let chatId: number = e.chat_id;
+  // чат мог быть удалён — пересоздаём при необходимости
+  if (chatId && !db.prepare("SELECT 1 FROM chats WHERE id = ? AND type = 'group'").get(chatId)) chatId = 0;
+
+  if (!chatId) {
+    const name = `🏍️ ${String(e.title || 'Событие').slice(0, 38)}`;
+    const result = db
+      .prepare("INSERT INTO chats (type, name, created_by, created_at) VALUES ('group', ?, ?, ?)")
+      .run(name, e.creator_id, now());
+    chatId = Number(result.lastInsertRowid);
+    db.prepare('UPDATE events SET chat_id = ? WHERE id = ?').run(chatId, eventId);
+    // Все текущие участники события — в чат
+    const members: any[] = db.prepare('SELECT user_id FROM event_members WHERE event_id = ?').all(eventId);
+    const add = db.prepare('INSERT INTO chat_members (chat_id, user_id, joined_at) VALUES (?, ?, ?)');
+    for (const m of members) {
+      add.run(chatId, m.user_id, now());
+      notifyUser(m.user_id, 'chats:update', {});
+    }
+  } else if (!isChatMember(chatId, userId)) {
+    db.prepare('INSERT INTO chat_members (chat_id, user_id, joined_at) VALUES (?, ?, ?)').run(chatId, userId, now());
+    notifyUser(userId, 'chats:update', {});
+  }
+  res.json({ chatId });
 });
 
 api.post('/events/:id/leave', requireAuth, (req, res) => {

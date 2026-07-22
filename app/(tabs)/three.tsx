@@ -976,17 +976,20 @@ export default function InternetChatRoom() {
 							</TouchableOpacity>
 						</View>
 						{/* Жанровые подборки */}
-						<ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-2" contentContainerStyle={{ gap: 6 }}>
-							{MUSIC_GENRES.map((g) => (
-								<TouchableOpacity
-									key={g.key || 'top'}
-									onPress={() => loadTrending(g.key)}
-									className={`px-3 py-2 rounded-full border ${musicGenre === g.key && !musicQuery ? 'bg-violet-600 border-violet-400' : 'bg-slate-950 border-slate-800'}`}
-								>
-									<Text className={`text-[11px] font-bold ${musicGenre === g.key && !musicQuery ? 'text-white' : 'text-slate-400'}`}>{g.label}</Text>
-								</TouchableOpacity>
-							))}
-						</ScrollView>
+						<View className="flex-row flex-wrap gap-1.5 mb-2">
+							{MUSIC_GENRES.map((g) => {
+								const active = musicGenre === g.key && !musicQuery;
+								return (
+									<TouchableOpacity
+										key={g.key || 'top'}
+										onPress={() => loadTrending(g.key)}
+										className={`px-3 py-2 rounded-full border ${active ? 'bg-violet-600 border-violet-400' : 'bg-slate-950 border-slate-800'}`}
+									>
+										<Text className={`text-[11px] font-bold ${active ? 'text-white' : 'text-slate-400'}`}>{g.label}</Text>
+									</TouchableOpacity>
+								);
+							})}
+						</View>
 
 						{/* Популярные плейлисты */}
 						{playlists.length > 0 && (

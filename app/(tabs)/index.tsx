@@ -70,36 +70,6 @@ export default function ProjectInfo() {
     }, [])
   );
 
-  // Проверка OTA-обновления при запуске: если доступно — предлагаем скачать.
-  useEffect(() => {
-    if (!Updates.isEnabled) return;
-    let active = true;
-    (async () => {
-      try {
-        const res = await Updates.checkForUpdateAsync();
-        if (!active) return;
-        if (res.isAvailable) {
-          setUpdateState('available');
-          Alert.alert(
-            'Доступно обновление',
-            'Вышла новая версия приложения. Скачать и перезапустить сейчас?',
-            [
-              { text: 'Позже', style: 'cancel' },
-              { text: 'Скачать', onPress: () => downloadUpdate() },
-            ]
-          );
-        } else {
-          setUpdateState('current');
-        }
-      } catch {
-        if (active) setUpdateState('error');
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
-
   const downloadUpdate = async () => {
     if (!Updates.isEnabled) return;
     setUpdateState('downloading');
@@ -112,6 +82,41 @@ export default function ProjectInfo() {
       Alert.alert('Ошибка', 'Не удалось скачать обновление. Проверьте связь и попробуйте позже.');
     }
   };
+
+  // Проверка OTA-обновления. manual=true — по тапу на APP_UPDATE (даём отклик
+  // и когда обновлений нет); manual=false — тихая проверка при запуске.
+  const checkForUpdate = async (manual: boolean) => {
+    if (!Updates.isEnabled) {
+      if (manual) Alert.alert('Обновление', 'Это dev-сборка — OTA-обновления отключены.');
+      return;
+    }
+    setUpdateState('checking');
+    try {
+      const res = await Updates.checkForUpdateAsync();
+      if (res.isAvailable) {
+        setUpdateState('available');
+        Alert.alert(
+          'Доступно обновление',
+          'Вышла новая версия приложения. Скачать и перезапустить сейчас?',
+          [
+            { text: 'Позже', style: 'cancel' },
+            { text: 'Скачать', onPress: () => downloadUpdate() },
+          ]
+        );
+      } else {
+        setUpdateState('current');
+        if (manual) Alert.alert('Обновление', 'У вас установлена последняя версия.');
+      }
+    } catch {
+      setUpdateState('error');
+      if (manual) Alert.alert('Обновление', 'Не удалось проверить обновления. Проверьте связь.');
+    }
+  };
+
+  // Тихая проверка при запуске экрана
+  useEffect(() => {
+    checkForUpdate(false);
+  }, []);
 
   useEffect(() => {
     // Foreground service с типом microphone здесь НЕ запускаем: на Android 14+
@@ -174,7 +179,7 @@ export default function ProjectInfo() {
       <ScrollView
         contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16 }}
         showsVerticalScrollIndicator={false}>
-        <ScreenHeader title="MESH_VOICE" subtitle="v2.8.8 dashboard" />
+        <ScreenHeader title="MESH_VOICE" subtitle="v2.8.9 dashboard" />
 
         <TouchableOpacity
           onPress={() => router.push('/profile')}
@@ -249,6 +254,7 @@ export default function ProjectInfo() {
               label="APP_UPDATE"
               status={UPDATE_LABEL[updateState]}
               color={UPDATE_COLOR[updateState]}
+              onPress={() => checkForUpdate(true)}
             />
           </View>
         </View>
@@ -264,15 +270,20 @@ export default function ProjectInfo() {
   );
 }
 
-function StatusRow({ label, status, color }: { label: string, status: string, color: string }) {
-  return (
-    <View className="flex-row items-center justify-between">
+function StatusRow({ label, status, color, onPress }: { label: string, status: string, color: string, onPress?: () => void }) {
+  const Row = (
+    <View className="flex-row items-center justify-between py-0.5">
       <View className="flex-row items-center">
         <View className={`w-2.5 h-2.5 rounded-full ${color} mr-3`} />
         <Text className="text-slate-300 font-mono text-xs">{label}</Text>
       </View>
       <Text className="text-slate-500 font-mono text-[10px]">{status}</Text>
     </View>
+  );
+  return onPress ? (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.6}>{Row}</TouchableOpacity>
+  ) : (
+    Row
   );
 }
 

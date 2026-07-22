@@ -280,16 +280,41 @@ pending_in) · `GET /friends` → `{friends,incoming,outgoing}` ·
   `mediaUrl`, типы `Attachment`/`MapPin`).
 - APK **v2.7.0** собран (CI run 29857620719, релиз-тег `apk-2.7.0`, debug-подпись).
 
-## Состояние доставки (ВАЖНО про runtime)
+## Состояние доставки (ВАЖНО про runtime; обновлено 2026-07-22)
 
 - OTA-ветка `production` расщеплена по runtime:
   - **1.0.0** — старые бинарники, последний апдейт **v2.6.1** (без медиа).
-  - **1.1.0** — новый APK (v2.7.0), последний апдейт **v2.7.3**.
+  - **1.1.0** — APK v2.7.0 (`apk-2.7.0`), последний апдейт **v2.7.10**.
+  - **1.2.0** — АКТУАЛЬНЫЙ: APK v2.8.0 (**релиз `apk-2.8.0`**, добавлен
+    expo-camera для видео-кружков), последний апдейт **v2.8.1**. Новые OTA
+    публикуются сюда (app.json version = 1.2.0).
 - Публикация OTA: `bun run ota` НЕ работает (нет `--message`); вручную:
   `npx expo export --output-dir dist --platform android --platform ios --no-bytecode`
   затем `npx eas update --branch production --skip-bundler --input-dir dist --message "..."`.
+- `babel-preset-expo` — явная devDependency: npm терял её при установке новых
+  пакетов (экспорт падал с «Cannot find module 'babel-preset-expo'»).
 - Бэкенд под systemd `meshvoice.service` (Restart=always). После правок
   `server/src`: `cd server && npm run build && systemctl --user restart meshvoice.service`.
+
+### Сессия 2026-07-22, вторая часть (v2.7.4 → v2.8.1)
+
+- v2.7.4: отмена маршрута (AbortController), клавиатура в метке, пикер события на гео.
+- v2.7.5: эмодзи-метки (map_pins.emoji + XSS-фильтр), фото метки фуллскрин,
+  голосовые (expo-av), лимит видео.
+- v2.7.6: messages.attachments (JSON, до 10), мульти-фото, фуллскрин фото/видео в чате.
+- v2.7.7: короткое имя комнаты звонка (roomLabel), KAV-аудит всех инпутов.
+- v2.7.8: события — visibility all/friends + GET /events/archive (вкладка Архив).
+- v2.7.9: фикс зацикливания голосовых (didJustFinish → один setStatusAsync!),
+  Ionicons-иконки плеера, upload через FileSystem.uploadAsync с прогрессом,
+  лимит 100 МБ + внятный 413.
+- v2.7.10: общий VideoPlayerModal (чат + метки) — последний OTA для 1.1.0.
+- v2.8.0 [RELEASE]: expo-camera, кружки in-app (круглая фронталка CameraView),
+  TG-кнопка (тап = режим 🎤/🎥, зажатие = запись; кнопка НЕ должна
+  перемонтироваться во время записи — иначе теряется onPressOut).
+- v2.8.1: обложки видео (VideoThumb, первый кадр), `legacy: true` в пикере
+  (классическая галерея вместо Google-фото-пикера).
+- Хост-фикс: `lo mtu 8192` (systemd lo-mtu.service) — см. память
+  meshvoice-upload-hang-rootcause; «баг multer» был ложным диагнозом.
 
 ## ⛔️ ИЗВЕСТНЫЕ БАГИ / TODO (по приоритету)
 

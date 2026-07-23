@@ -8,4 +8,4 @@
 // ВНИМАНИЕ: URL quick-tunnel меняется при рестарте cloudflared — при обрыве
 // связи проверь `systemctl --user status cloudflared-mv` и URL в
 // ~/.cache/cf-mv.log, обнови эту строку и опубликуй OTA.
-export const BACKEND_URL = 'https://confidential-phpbb-epic-leisure.trycloudflare.com';
+export const BACKEND_URL = 'https://pet-sample-ashley-adequate.trycloudflare.com';
